@@ -1,0 +1,10 @@
+backend/.env
+backend/node_modules/
+frontend/node_modules/
+uploads/
+config.php
+
+*.log
+npm-debug.log*
+Thumbs.db
+.DS_Store

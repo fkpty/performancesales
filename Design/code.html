@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Contract Intelligence - Dashboard</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              "colors": {
+                      "error": "#ba1a1a",
+                      "primary-fixed": "#dae2fd",
+                      "secondary-fixed-dim": "#b7c8e1",
+                      "on-tertiary-fixed": "#271901",
+                      "on-surface": "#1b1b1d",
+                      "on-error-container": "#93000a",
+                      "surface-container-lowest": "#ffffff",
+                      "primary-container": "#131b2e",
+                      "secondary": "#505f76",
+                      "surface-container-highest": "#e4e2e4",
+                      "on-tertiary-fixed-variant": "#574425",
+                      "background": "#fcf8fa",
+                      "on-primary-container": "#7c839b",
+                      "secondary-fixed": "#d3e4fe",
+                      "on-tertiary-container": "#98805d",
+                      "inverse-surface": "#303032",
+                      "outline": "#76777d",
+                      "tertiary-fixed-dim": "#dec29a",
+                      "surface-container": "#f0edef",
+                      "surface-dim": "#dcd9db",
+                      "on-background": "#1b1b1d",
+                      "surface-bright": "#fcf8fa",
+                      "surface": "#fcf8fa",
+                      "surface-tint": "#565e74",
+                      "surface-container-high": "#eae7e9",
+                      "on-surface-variant": "#45464d",
+                      "on-secondary-fixed-variant": "#38485d",
+                      "on-primary-fixed": "#131b2e",
+                      "secondary-container": "#d0e1fb",
+                      "on-primary-fixed-variant": "#3f465c",
+                      "primary-fixed-dim": "#bec6e0",
+                      "on-tertiary": "#ffffff",
+                      "surface-variant": "#e4e2e4",
+                      "on-secondary": "#ffffff",
+                      "surface-container-low": "#f6f3f5",
+                      "on-secondary-fixed": "#0b1c30",
+                      "primary": "#000000",
+                      "tertiary": "#000000",
+                      "inverse-on-surface": "#f3f0f2",
+                      "on-secondary-container": "#54647a",
+                      "tertiary-container": "#271901",
+                      "error-container": "#ffdad6",
+                      "on-error": "#ffffff",
+                      "on-primary": "#ffffff",
+                      "outline-variant": "#c6c6cd",
+                      "inverse-primary": "#bec6e0",
+                      "tertiary-fixed": "#fcdeb5"
+              },
+              "borderRadius": {
+                      "DEFAULT": "0.25rem",
+                      "lg": "0.5rem",
+                      "xl": "0.75rem",
+                      "full": "9999px"
+              },
+              "spacing": {
+                      "lg": "24px",
+                      "xl": "32px",
+                      "grid-gutter": "20px",
+                      "md": "16px",
+                      "sm": "12px",
+                      "base": "4px",
+                      "xs": "8px",
+                      "grid-margin": "40px"
+              },
+              "fontFamily": {
+                      "h1": [
+                              "Inter"
+                      ],
+                      "h3": [
+                              "Inter"
+                      ],
+                      "body-lg": [
+                              "Inter"
+                      ],
+                      "label-caps": [
+                              "Inter"
+                      ],
+                      "body-sm": [
+                              "Inter"
+                      ],
+                      "h2": [
+                              "Inter"
+                      ],
+                      "table-data": [
+                              "Inter"
+                      ]
+              },
+              "fontSize": {
+                      "h1": [
+                              "32px",
+                              {
+                                      "lineHeight": "1.2",
+                                      "letterSpacing": "-0.02em",
+                                      "fontWeight": "600"
+                              }
+                      ],
+                      "h3": [
+                              "20px",
+                              {
+                                      "lineHeight": "1.4",
+                                      "letterSpacing": "-0.01em",
+                                      "fontWeight": "600"
+                              }
+                      ],
+                      "body-lg": [
+                              "16px",
+                              {
+                                      "lineHeight": "1.6",
+                                      "letterSpacing": "0",
+                                      "fontWeight": "400"
+                              }
+                      ],
+                      "label-caps": [
+                              "12px",
+                              {
+                                      "lineHeight": "1",
+                                      "letterSpacing": "0.05em",
+                                      "fontWeight": "600"
+                              }
+                      ],
+                      "body-sm": [
+                              "14px",
+                              {
+                                      "lineHeight": "1.5",
+                                      "letterSpacing": "0",
+                                      "fontWeight": "400"
+                              }
+                      ],
+                      "h2": [
+                              "24px",
+                              {
+                                      "lineHeight": "1.3",
+                                      "letterSpacing": "-0.01em",
+                                      "fontWeight": "600"
+                              }
+                      ],
+                      "table-data": [
+                              "14px",
+                              {
+                                      "lineHeight": "1",
+                                      "letterSpacing": "0",
+                                      "fontWeight": "500"
+                              }
+                      ]
+              }
+      },
+          },
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .material-symbols-outlined[data-weight="fill"] {
+            font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+    </style>
+</head>
+<body class="bg-background text-on-surface font-body-sm min-h-screen flex">
+<!-- SideNavBar -->
+<nav class="bg-slate-50 dark:bg-slate-900 text-blue-600 dark:text-blue-400 text-[13px] font-medium Inter h-screen w-64 border-r fixed left-0 top-0 z-40 border-slate-200 dark:border-slate-800 flat no-shadow flex flex-col p-4 space-y-1">
+<div class="mb-lg px-xs py-md">
+<div class="flex items-center gap-sm">
+<div class="w-8 h-8 rounded bg-primary-container text-on-primary-container flex items-center justify-center font-bold">
+                    C
+                </div>
+<div>
+<div class="text-lg font-black text-slate-900 dark:text-white leading-tight">ContractFlow</div>
+<div class="text-slate-500 text-[11px] uppercase tracking-wider">Legal &amp; Procurement</div>
+</div>
+</div>
+</div>
+<button class="w-full bg-primary-container text-on-primary flex items-center justify-center gap-xs py-sm px-md rounded-lg font-body-sm mb-lg shadow-sm hover:opacity-90 transition-opacity">
+<span class="material-symbols-outlined text-[18px]">add</span>
+            New Analysis
+        </button>
+<div class="flex-1 space-y-xs">
+<a class="bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-sm border border-slate-200 dark:border-slate-700 rounded-lg py-2 px-3 flex items-center gap-3" href="#">
+<span class="material-symbols-outlined text-[20px]" data-icon="dashboard">dashboard</span>
+                Dashboard
+            </a>
+<a class="text-slate-500 dark:text-slate-400 py-2 px-3 flex items-center gap-3 hover:bg-slate-200/50 dark:hover:bg-slate-800/50 hover:text-slate-900 dark:hover:text-white transition-all cursor-pointer active:bg-slate-200 dark:active:bg-slate-700 rounded-lg" href="#">
+<span class="material-symbols-outlined text-[20px]" data-icon="description">description</span>
+                Contracts
+            </a>
+<a class="text-slate-500 dark:text-slate-400 py-2 px-3 flex items-center gap-3 hover:bg-slate-200/50 dark:hover:bg-slate-800/50 hover:text-slate-900 dark:hover:text-white transition-all cursor-pointer active:bg-slate-200 dark:active:bg-slate-700 rounded-lg" href="#">
+<span class="material-symbols-outlined text-[20px]" data-icon="analytics">analytics</span>
+                Reports
+            </a>
+<a class="text-slate-500 dark:text-slate-400 py-2 px-3 flex items-center gap-3 hover:bg-slate-200/50 dark:hover:bg-slate-800/50 hover:text-slate-900 dark:hover:text-white transition-all cursor-pointer active:bg-slate-200 dark:active:bg-slate-700 rounded-lg" href="#">
+<span class="material-symbols-outlined text-[20px]" data-icon="settings">settings</span>
+                Settings
+            </a>
+</div>
+<div class="mt-auto pt-lg border-t border-outline-variant space-y-xs">
+<a class="text-slate-500 dark:text-slate-400 py-2 px-3 flex items-center gap-3 hover:bg-slate-200/50 dark:hover:bg-slate-800/50 hover:text-slate-900 dark:hover:text-white transition-all cursor-pointer rounded-lg" href="#">
+<span class="material-symbols-outlined text-[20px]" data-icon="help">help</span>
+                Help Center
+            </a>
+<a class="text-slate-500 dark:text-slate-400 py-2 px-3 flex items-center gap-3 hover:bg-slate-200/50 dark:hover:bg-slate-800/50 hover:text-slate-900 dark:hover:text-white transition-all cursor-pointer rounded-lg" href="#">
+<span class="material-symbols-outlined text-[20px]" data-icon="headset_mic">headset_mic</span>
+                Contact Support
+            </a>
+</div>
+</nav>
+<!-- Main Content -->
+<main class="ml-64 flex-1 flex flex-col min-h-screen">
+<!-- Top Header -->
+<header class="bg-surface-container-lowest border-b border-outline-variant sticky top-0 z-30 px-lg h-16 flex items-center justify-between">
+<h1 class="font-h2 text-h2 text-on-surface">Contract Analysis</h1>
+<div class="flex items-center gap-md">
+<div class="flex items-center gap-xs text-on-surface-variant font-body-sm">
+<span class="material-symbols-outlined text-[18px]">calendar_today</span>
+<select class="bg-transparent border-none focus:ring-0 cursor-pointer p-0 pr-xs font-medium">
+<option>2024</option>
+<option>2023</option>
+</select>
+</div>
+<div class="h-4 w-px bg-outline-variant"></div>
+<button class="flex items-center gap-xs text-on-surface-variant hover:text-on-surface font-body-sm px-xs py-base rounded hover:bg-surface-container transition-colors">
+<span class="material-symbols-outlined text-[18px]">filter_list</span>
+                    Global Filters
+                </button>
+<button class="bg-primary-container text-on-primary font-body-sm px-md py-xs rounded-lg flex items-center gap-xs hover:opacity-90 transition-opacity ml-sm">
+<span class="material-symbols-outlined text-[18px]">upload</span>
+                    Upload Excel
+                </button>
+</div>
+</header>
+<div class="p-lg space-y-lg max-w-[1440px] mx-auto w-full">
+<!-- KPIs -->
+<section class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-md">
+<!-- KPI 1 -->
+<div class="bg-surface-container-lowest p-md rounded-xl border border-outline-variant shadow-sm flex flex-col">
+<div class="flex justify-between items-start mb-sm">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase">Total Active</span>
+<span class="material-symbols-outlined text-outline text-[20px]">description</span>
+</div>
+<div class="font-h1 text-h1 text-on-surface mb-xs">1,248</div>
+<div class="flex items-center gap-xs text-on-secondary-container font-table-data text-table-data">
+<span class="material-symbols-outlined text-[16px] text-primary-container">arrow_upward</span>
+<span class="text-primary-container">12%</span>
+<span class="text-on-surface-variant text-[12px] font-normal">vs PY</span>
+</div>
+</div>
+<!-- KPI 2 -->
+<div class="bg-surface-container-lowest p-md rounded-xl border border-outline-variant shadow-sm flex flex-col">
+<div class="flex justify-between items-start mb-sm">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase">Expiring Soon</span>
+<span class="material-symbols-outlined text-[#F59E0B] text-[20px]">warning</span>
+</div>
+<div class="font-h1 text-h1 text-on-surface mb-xs">84</div>
+<div class="flex items-center gap-xs text-on-secondary-container font-table-data text-table-data">
+<span class="material-symbols-outlined text-[16px] text-error">arrow_upward</span>
+<span class="text-error">5%</span>
+<span class="text-on-surface-variant text-[12px] font-normal">vs PY</span>
+</div>
+</div>
+<!-- KPI 3 -->
+<div class="bg-surface-container-lowest p-md rounded-xl border border-outline-variant shadow-sm flex flex-col">
+<div class="flex justify-between items-start mb-sm">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase">Lost</span>
+<span class="material-symbols-outlined text-error text-[20px]">cancel</span>
+</div>
+<div class="font-h1 text-h1 text-on-surface mb-xs">12</div>
+<div class="flex items-center gap-xs text-on-secondary-container font-table-data text-table-data">
+<span class="material-symbols-outlined text-[16px] text-primary-container">arrow_downward</span>
+<span class="text-primary-container">2%</span>
+<span class="text-on-surface-variant text-[12px] font-normal">vs PY</span>
+</div>
+</div>
+<!-- KPI 4 -->
+<div class="bg-surface-container-lowest p-md rounded-xl border border-outline-variant shadow-sm flex flex-col">
+<div class="flex justify-between items-start mb-sm">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase">Monthly Rev</span>
+<span class="material-symbols-outlined text-outline text-[20px]">payments</span>
+</div>
+<div class="font-h1 text-h1 text-on-surface mb-xs">$2.4M</div>
+<div class="flex items-center gap-xs text-on-secondary-container font-table-data text-table-data">
+<span class="material-symbols-outlined text-[16px] text-primary-container">arrow_upward</span>
+<span class="text-primary-container">8%</span>
+<span class="text-on-surface-variant text-[12px] font-normal">vs PY</span>
+</div>
+</div>
+<!-- KPI 5 -->
+<div class="bg-surface-container-lowest p-md rounded-xl border border-outline-variant shadow-sm flex flex-col">
+<div class="flex justify-between items-start mb-sm">
+<span class="font-label-caps text-label-caps text-on-surface-variant uppercase">Avg Profitability</span>
+<span class="material-symbols-outlined text-primary-container text-[20px]">trending_up</span>
+</div>
+<div class="font-h1 text-h1 text-on-surface mb-xs">32.5%</div>
+<div class="flex items-center gap-xs text-on-secondary-container font-table-data text-table-data">
+<span class="material-symbols-outlined text-[16px] text-primary-container">arrow_upward</span>
+<span class="text-primary-container">1.2%</span>
+<span class="text-on-surface-variant text-[12px] font-normal">vs PY</span>
+</div>
+</div>
+</section>
+<!-- Charts Row -->
+<section class="grid grid-cols-1 lg:grid-cols-3 gap-md h-80">
+<!-- Left Chart placeholder -->
+<div class="bg-surface-container-lowest rounded-xl border border-outline-variant shadow-sm p-md flex flex-col h-full">
+<h3 class="font-h3 text-h3 text-on-surface mb-md">Contract Status</h3>
+<div class="flex-1 flex items-center justify-center bg-surface-container-low rounded-lg border border-dashed border-outline-variant text-on-surface-variant font-body-sm">
+                         [Doughnut Chart Placeholder]
+                     </div>
+</div>
+<!-- Center Chart placeholder -->
+<div class="bg-surface-container-lowest rounded-xl border border-outline-variant shadow-sm p-md flex flex-col h-full">
+<h3 class="font-h3 text-h3 text-on-surface mb-md">Revenue Evolution</h3>
+<div class="flex-1 flex items-center justify-center bg-surface-container-low rounded-lg border border-dashed border-outline-variant text-on-surface-variant font-body-sm">
+                         [Line Chart Placeholder]
+                     </div>
+</div>
+<!-- Right Chart placeholder -->
+<div class="bg-surface-container-lowest rounded-xl border border-outline-variant shadow-sm p-md flex flex-col h-full">
+<h3 class="font-h3 text-h3 text-on-surface mb-md">Revenue at Risk</h3>
+<div class="flex-1 flex items-center justify-center bg-surface-container-low rounded-lg border border-dashed border-outline-variant text-on-surface-variant font-body-sm">
+                         [Bar Chart Placeholder]
+                     </div>
+</div>
+</section>
+<!-- Data Grid -->
+<section class="bg-surface-container-lowest rounded-xl border border-outline-variant shadow-sm flex flex-col overflow-hidden">
+<div class="p-md border-b border-outline-variant flex items-center justify-between bg-surface-container-low/50">
+<h3 class="font-h3 text-h3 text-on-surface">Contract Details</h3>
+<div class="flex gap-sm">
+<div class="relative">
+<span class="material-symbols-outlined absolute left-xs top-1/2 -translate-y-1/2 text-outline text-[18px]">search</span>
+<input class="pl-xl pr-sm py-xs border border-outline-variant rounded-md bg-surface-container-lowest text-body-sm font-body-sm focus:border-primary-container focus:ring-1 focus:ring-primary-container outline-none w-64" placeholder="Search contracts..." type="text"/>
+</div>
+<button class="border border-outline-variant text-on-surface px-sm py-xs rounded-md font-table-data text-table-data hover:bg-surface-container transition-colors flex items-center gap-xs">
+<span class="material-symbols-outlined text-[18px]">download</span>
+                            Export
+                        </button>
+</div>
+</div>
+<div class="overflow-x-auto">
+<table class="w-full text-left border-collapse">
+<thead>
+<tr class="bg-surface-container text-on-surface-variant font-label-caps text-label-caps border-b border-outline-variant">
+<th class="p-sm font-semibold uppercase tracking-wider">Client</th>
+<th class="p-sm font-semibold uppercase tracking-wider">Type</th>
+<th class="p-sm font-semibold uppercase tracking-wider">End Date</th>
+<th class="p-sm font-semibold uppercase tracking-wider">Status</th>
+<th class="p-sm font-semibold uppercase tracking-wider text-right">Monthly Rev</th>
+<th class="p-sm font-semibold uppercase tracking-wider text-right">Profitability</th>
+</tr>
+</thead>
+<tbody class="font-table-data text-table-data text-on-surface">
+<tr class="border-b border-outline-variant hover:bg-surface-container-low transition-colors group">
+<td class="p-sm font-medium">Acme Corp</td>
+<td class="p-sm text-on-surface-variant">SaaS Agreement</td>
+<td class="p-sm">Oct 15, 2024</td>
+<td class="p-sm">
+<span class="px-2 py-1 rounded-full bg-primary-container/10 text-primary-container text-[11px] font-bold tracking-wide">ACTIVE</span>
+</td>
+<td class="p-sm text-right">$45,000</td>
+<td class="p-sm text-right text-primary-container">34%</td>
+</tr>
+<tr class="border-b border-outline-variant hover:bg-surface-container-low transition-colors group">
+<td class="p-sm font-medium">Global Tech</td>
+<td class="p-sm text-on-surface-variant">Managed Services</td>
+<td class="p-sm text-error">Nov 01, 2024</td>
+<td class="p-sm">
+<span class="px-2 py-1 rounded-full bg-error/10 text-error text-[11px] font-bold tracking-wide">AT RISK</span>
+</td>
+<td class="p-sm text-right">$120,000</td>
+<td class="p-sm text-right text-on-surface-variant">28%</td>
+</tr>
+<tr class="border-b border-outline-variant hover:bg-surface-container-low transition-colors group">
+<td class="p-sm font-medium">Stark Industries</td>
+<td class="p-sm text-on-surface-variant">Enterprise License</td>
+<td class="p-sm">Dec 31, 2025</td>
+<td class="p-sm">
+<span class="px-2 py-1 rounded-full bg-primary-container/10 text-primary-container text-[11px] font-bold tracking-wide">ACTIVE</span>
+</td>
+<td class="p-sm text-right">$85,000</td>
+<td class="p-sm text-right text-primary-container">42%</td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+</div>
+</main>
+</body></html>

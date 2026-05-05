@@ -1,0 +1,22 @@
+Options -Indexes
+DirectoryIndex index.php
+
+# Route all non-asset requests to index.php (PHP auth gate)
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteBase /performance-sales/
+
+    RewriteRule ^$ index.php [L,QSA]
+
+    # Allow direct access to public/ assets (JS, CSS, images)
+    RewriteCond %{REQUEST_URI} !^/performance-sales/index\.php$
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_URI} !^/performance-sales/public/
+    RewriteRule ^(.*)$ index.php [L,QSA]
+</IfModule>
+
+# Security headers
+<IfModule mod_headers.c>
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+</IfModule>
