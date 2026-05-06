@@ -99,7 +99,7 @@ export default function EfficiencyPage() {
           <div>
             <h2 className="font-h2 text-h2 text-on-surface">Eficiencia</h2>
             <p className="text-body-sm text-on-surface-variant mt-xs max-w-3xl">
-              Replica operativa del workbook con YTD Revenue y YTD Profit tomados automaticamente de las cargas activas.
+              Replica operativa del workbook con YTD Revenue y YTD Profit tomados segun la fuente configurada de cada grupo.
             </p>
           </div>
           <div className="rounded-xl bg-surface-container-low px-md py-sm text-body-sm text-on-surface-variant border border-outline-variant">

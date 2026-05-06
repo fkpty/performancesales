@@ -252,6 +252,7 @@ CREATE TABLE IF NOT EXISTS performance_efficiency_groups (
   group_name                 VARCHAR(255)    NOT NULL DEFAULT '',
   manager_name               VARCHAR(255)    NOT NULL DEFAULT '',
   manager_user_id            BIGINT          NULL,
+  metrics_source             ENUM('sales_upload','manual_monthly') NOT NULL DEFAULT 'sales_upload',
   total_salary_amount        DECIMAL(15,4)   NULL DEFAULT NULL COMMENT 'Valor dentro del parentesis de SALARY FULLY LOADED para el total del grupo',
   total_salary_divisor       DECIMAL(15,4)   NOT NULL DEFAULT 1,
   total_salary_multiplier    DECIMAL(15,4)   NOT NULL DEFAULT 1,
@@ -300,3 +301,24 @@ CREATE TABLE IF NOT EXISTS performance_efficiency_members (
   INDEX idx_eff_member_lookup (sheet_type, config_month, seller_name),
   INDEX idx_eff_member_sort (group_id, sort_order)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS performance_efficiency_member_manual_metrics (
+  id              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  sheet_type      ENUM('sales_productivity','presales') NOT NULL,
+  config_month    DATE            NOT NULL COMMENT 'Primer dia del mes configurado',
+  group_name      VARCHAR(255)    NOT NULL DEFAULT '',
+  seller_name     VARCHAR(255)    NOT NULL DEFAULT '',
+  metric_month    DATE            NOT NULL COMMENT 'Primer dia del mes capturado',
+  revenue         DECIMAL(15,2)   NOT NULL DEFAULT 0,
+  gross_profit    DECIMAL(15,2)   NOT NULL DEFAULT 0,
+  created_by      BIGINT          NULL,
+  updated_by      BIGINT          NULL,
+  created_at      DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at      DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_eff_manual_metric (sheet_type, config_month, group_name, seller_name, metric_month),
+  INDEX idx_eff_manual_metric_lookup (sheet_type, config_month, group_name, seller_name),
+  INDEX idx_eff_manual_metric_month (metric_month)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+ALTER TABLE performance_efficiency_groups
+  ADD COLUMN IF NOT EXISTS metrics_source ENUM('sales_upload','manual_monthly') NOT NULL DEFAULT 'sales_upload' AFTER manager_user_id;

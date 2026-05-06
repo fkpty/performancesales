@@ -235,6 +235,15 @@ function SheetEditor({
                 <Field label="Orden" value={group.sort_order} onChange={(value) => onGroupFieldChange(groupIndex, 'sort_order', value)} type="number" />
               </div>
 
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-md">
+                <SelectField
+                  label="Fuente YTD"
+                  value={group.metrics_source || 'sales_upload'}
+                  onChange={(value) => onGroupFieldChange(groupIndex, 'metrics_source', value)}
+                  options={METRICS_SOURCE_OPTIONS}
+                />
+              </div>
+
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-md">
                 <Field label="Salary total amount" value={group.total_salary_amount ?? ''} onChange={(value) => onGroupFieldChange(groupIndex, 'total_salary_amount', value)} type="number" step="0.0001" />
                 <Field label="Salary total divisor" value={group.total_salary_divisor} onChange={(value) => onGroupFieldChange(groupIndex, 'total_salary_divisor', value)} type="number" step="0.0001" />
@@ -325,12 +334,225 @@ function SheetEditor({
                   </tbody>
                 </table>
               </div>
+
+              {group.metrics_source === 'manual_monthly' && (
+                <ManualMetricsSection
+                  sheet={sheet}
+                  group={group}
+                  groupIndex={groupIndex}
+                  onMemberFieldChange={onMemberFieldChange}
+                />
+              )}
             </div>
           </div>
         ))}
       </div>
     </section>
   );
+}
+
+function ManualMetricsSection({ sheet, group, groupIndex, onMemberFieldChange }) {
+  const reportYear = normalizeManualMetricYear(sheet.report_year, new Date().getFullYear());
+  const [selectedYearInput, setSelectedYearInput] = useState(String(reportYear));
+  const [expandedMembers, setExpandedMembers] = useState({});
+
+  const selectedYear = normalizeManualMetricYear(selectedYearInput, reportYear);
+  const months = buildManualMetricMonths(selectedYear);
+  const members = useMemo(
+    () => (group.members || [])
+      .map((member, actualMemberIndex) => ({
+        member,
+        actualMemberIndex,
+        memberKey: buildManualMemberCardKey(member, actualMemberIndex),
+      }))
+      .filter(({ member }) => !isDraftOtherMember(member)),
+    [group.members]
+  );
+
+  useEffect(() => {
+    setSelectedYearInput(String(reportYear));
+  }, [reportYear, groupIndex]);
+
+  useEffect(() => {
+    setExpandedMembers((current) => {
+      const next = {};
+
+      members.forEach(({ memberKey }, index) => {
+        if (Object.prototype.hasOwnProperty.call(current, memberKey)) {
+          next[memberKey] = current[memberKey];
+          return;
+        }
+
+        next[memberKey] = index === 0;
+      });
+
+      return next;
+    });
+  }, [members]);
+
+  if (!members.length) {
+    return (
+      <div className="rounded-2xl border border-dashed border-outline-variant px-lg py-lg text-sm text-on-surface-variant bg-surface-container-low/10">
+        Agrega vendedores al grupo para capturar manualmente Revenue y Profit por mes.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-md">
+      <div className="flex flex-wrap items-end justify-between gap-md">
+        <div className="space-y-xs min-w-[12rem]">
+          <h5 className="font-medium text-on-surface">Captura manual mensual</h5>
+          <p className="text-[12px] text-on-surface-variant">
+            Primero elige el año a capturar. Luego se habilitan los 12 meses para cada vendedor.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-end gap-sm">
+          <label className="space-y-xs block min-w-[10rem]">
+            <span className="text-[12px] uppercase tracking-wide text-on-surface-variant">Año de captura</span>
+            <input
+              type="number"
+              min="2000"
+              max="2100"
+              value={selectedYearInput}
+              onChange={(event) => setSelectedYearInput(event.target.value)}
+              className="w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-sm py-xs text-on-surface"
+            />
+          </label>
+
+          <button
+            type="button"
+            onClick={() => setExpandedMembers(Object.fromEntries(members.map(({ memberKey }) => [memberKey, true])))}
+            className="border border-outline-variant text-on-surface font-body-sm px-md py-xs rounded-lg hover:bg-surface-container-low transition-colors"
+          >
+            Expandir todos
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setExpandedMembers(Object.fromEntries(members.map(({ memberKey }) => [memberKey, false])))}
+            className="border border-outline-variant text-on-surface font-body-sm px-md py-xs rounded-lg hover:bg-surface-container-low transition-colors"
+          >
+            Contraer todos
+          </button>
+        </div>
+      </div>
+
+      <div className="space-y-md">
+        {members.map(({ member, actualMemberIndex, memberKey }, memberIndex) => {
+          const summaryMonths = selectedYear === reportYear ? Number(sheet.ytd_month_number || 0) : 12;
+          const summary = summarizeManualMetrics(member.manual_metrics || [], selectedYear, summaryMonths);
+          const summaryLabel = selectedYear === reportYear
+            ? `YTD ${selectedYear} hasta mes ${sheet.ytd_month_number}`
+            : `Acumulado ${selectedYear}`;
+          const isExpanded = Boolean(expandedMembers[memberKey]);
+
+          return (
+            <div key={`${groupIndex}-${memberIndex}-${member.seller_name}`} className="rounded-2xl border border-outline-variant bg-surface-container-lowest overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setExpandedMembers((current) => ({
+                  ...current,
+                  [memberKey]: !current[memberKey],
+                }))}
+                className="w-full px-md py-sm border-b border-outline-variant bg-surface-container-low/30 flex flex-wrap items-center justify-between gap-sm text-left hover:bg-surface-container-low/40 transition-colors"
+              >
+                <div>
+                  <h6 className="font-medium text-on-surface">{member.seller_name || `Vendedor ${memberIndex + 1}`}</h6>
+                  <p className="text-[12px] text-on-surface-variant mt-xs">{member.market_segment || 'Sin segmento'} · {summaryLabel}</p>
+                </div>
+
+                <div className="flex items-center gap-md ml-auto">
+                  <div className="text-[12px] text-on-surface-variant text-right">
+                    <div>Revenue: {formatManualMetricTotal(summary.revenue)}</div>
+                    <div>Profit: {formatManualMetricTotal(summary.gross_profit)}</div>
+                  </div>
+                  <span className="material-symbols-outlined text-on-surface">{isExpanded ? 'expand_less' : 'expand_more'}</span>
+                </div>
+              </button>
+
+              {isExpanded && (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-sm">
+                    <thead className="bg-surface-container-low/20 text-on-surface-variant">
+                      <tr>
+                        <th className="px-sm py-sm text-left font-medium text-[12px] uppercase tracking-wide whitespace-nowrap">Mes</th>
+                        <th className="px-sm py-sm text-left font-medium text-[12px] uppercase tracking-wide whitespace-nowrap">Revenue</th>
+                        <th className="px-sm py-sm text-left font-medium text-[12px] uppercase tracking-wide whitespace-nowrap">Profit</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {months.map((month) => {
+                        const entry = findManualMetricEntry(member.manual_metrics || [], month.metric_month);
+
+                        return (
+                          <tr key={`${member.seller_name}-${month.metric_month}`} className="border-t border-outline-variant/50">
+                            <td className="px-sm py-sm whitespace-nowrap text-on-surface">{month.label}</td>
+                            <td className="px-sm py-sm min-w-[10rem]">
+                              <input
+                                type="number"
+                                step="0.01"
+                                value={entry?.revenue ?? ''}
+                                onChange={(event) => onMemberFieldChange(
+                                  groupIndex,
+                                  actualMemberIndex,
+                                  'manual_metrics',
+                                  updateManualMetricEntries(member.manual_metrics || [], month.metric_month, 'revenue', event.target.value)
+                                )}
+                                className="w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-sm py-xs text-on-surface"
+                              />
+                            </td>
+                            <td className="px-sm py-sm min-w-[10rem]">
+                              <input
+                                type="number"
+                                step="0.01"
+                                value={entry?.gross_profit ?? ''}
+                                onChange={(event) => onMemberFieldChange(
+                                  groupIndex,
+                                  actualMemberIndex,
+                                  'manual_metrics',
+                                  updateManualMetricEntries(member.manual_metrics || [], month.metric_month, 'gross_profit', event.target.value)
+                                )}
+                                className="w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-sm py-xs text-on-surface"
+                              />
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function buildManualMemberCardKey(member, actualMemberIndex) {
+  const employeeId = String(member?.employee_id || '').trim();
+  if (employeeId) {
+    return `employee:${employeeId}`;
+  }
+
+  const sellerName = String(member?.seller_name || '').trim().toLowerCase();
+  if (sellerName) {
+    return `seller:${sellerName}:${actualMemberIndex}`;
+  }
+
+  return `member:${actualMemberIndex}`;
+}
+
+function normalizeManualMetricYear(value, fallbackYear) {
+  const parsed = Number(value);
+  if (Number.isInteger(parsed) && parsed >= 2000 && parsed <= 2100) {
+    return parsed;
+  }
+
+  return Number(fallbackYear) || new Date().getFullYear();
 }
 
 function Field({ label, value, onChange, type = 'text', step, disabled = false }) {
@@ -371,6 +593,7 @@ function createEmptyGroup(index) {
     group_name: `Grupo ${index + 1}`,
     manager_name: '',
     manager_user_id: '',
+    metrics_source: 'sales_upload',
     total_salary_amount: '',
     total_salary_divisor: 1,
     total_salary_multiplier: 1,
@@ -400,6 +623,7 @@ function createEmptyMember(index) {
     salary_multiplier: 1,
     salary_months_mode: 'period',
     salary_months_custom: '',
+    manual_metrics: [],
     is_other_row: false,
     sort_order: index,
   };
@@ -418,6 +642,7 @@ function normalizeDraftConfig(config) {
 
     sheet.groups = sheet.groups.map((group, groupIndex) => ({
       ...group,
+      metrics_source: normalizeDraftMetricsSource(group.metrics_source),
       sort_order: groupIndex,
       members: sortDraftMembers(group.members || []),
     }));
@@ -440,6 +665,7 @@ function sortDraftMembers(members) {
     })
     .map((member, index) => ({
       ...member,
+      manual_metrics: sortDraftManualMetrics(member.manual_metrics || []),
       is_other_row: isDraftOtherMember(member),
       sort_order: index,
     }));
@@ -468,6 +694,11 @@ const MONTH_MODES = [
   { value: 'custom', label: 'Usar valor custom' },
 ];
 
+const METRICS_SOURCE_OPTIONS = [
+  { value: 'sales_upload', label: 'Automatico desde Performance Sales' },
+  { value: 'manual_monthly', label: 'Manual por mes y vendedor' },
+];
+
 const EDITOR_COLUMNS = [
   { key: 'employee_id', label: 'ID empleado' },
   { key: 'seller_name', label: 'Vendedor' },
@@ -488,3 +719,100 @@ const EDITOR_COLUMNS = [
   { key: 'salary_months_custom', label: 'Salary months custom', type: 'number' },
   { key: 'is_other_row', label: 'Other', type: 'checkbox' },
 ];
+
+function buildManualMetricMonths(reportYear) {
+  const safeYear = Number(reportYear) || new Date().getFullYear();
+
+  return Array.from({ length: 12 }, (_, index) => {
+    const monthNumber = index + 1;
+    const metricMonth = `${safeYear}-${String(monthNumber).padStart(2, '0')}-01`;
+
+    return {
+      metric_month: metricMonth,
+      month_number: monthNumber,
+      label: new Date(safeYear, index, 1).toLocaleString('es-PA', { month: 'short', year: 'numeric' }),
+    };
+  });
+}
+
+function findManualMetricEntry(manualMetrics, metricMonth) {
+  return (manualMetrics || []).find((entry) => entry?.metric_month === metricMonth) || null;
+}
+
+function updateManualMetricEntries(manualMetrics, metricMonth, field, rawValue) {
+  const nextEntries = Array.isArray(manualMetrics)
+    ? manualMetrics.map((entry) => ({ ...entry }))
+    : [];
+  const index = nextEntries.findIndex((entry) => entry?.metric_month === metricMonth);
+
+  if (index === -1) {
+    if (rawValue === '' || rawValue == null) {
+      return sortDraftManualMetrics(nextEntries);
+    }
+
+    nextEntries.push({
+      metric_month: metricMonth,
+      revenue: field === 'revenue' ? rawValue : '',
+      gross_profit: field === 'gross_profit' ? rawValue : '',
+    });
+
+    return sortDraftManualMetrics(nextEntries);
+  }
+
+  nextEntries[index] = {
+    ...nextEntries[index],
+    [field]: rawValue,
+  };
+
+  if (isManualMetricEmpty(nextEntries[index])) {
+    nextEntries.splice(index, 1);
+  }
+
+  return sortDraftManualMetrics(nextEntries);
+}
+
+function isManualMetricEmpty(entry) {
+  return !hasDraftNumber(entry?.revenue) && !hasDraftNumber(entry?.gross_profit);
+}
+
+function hasDraftNumber(value) {
+  return value !== '' && value != null && Number.isFinite(Number(value));
+}
+
+function sortDraftManualMetrics(manualMetrics) {
+  return [...(manualMetrics || [])]
+    .filter((entry) => entry?.metric_month)
+    .sort((left, right) => String(left.metric_month).localeCompare(String(right.metric_month)));
+}
+
+function summarizeManualMetrics(manualMetrics, reportYear, ytdMonthNumber) {
+  return (manualMetrics || []).reduce((totals, entry) => {
+    const metricMonth = String(entry?.metric_month || '');
+    const entryYear = Number(metricMonth.slice(0, 4));
+    const entryMonth = Number(metricMonth.slice(5, 7));
+    if (entryYear !== Number(reportYear) || entryMonth > Number(ytdMonthNumber || 0)) {
+      return totals;
+    }
+
+    return {
+      revenue: totals.revenue + toDraftNumber(entry?.revenue),
+      gross_profit: totals.gross_profit + toDraftNumber(entry?.gross_profit),
+    };
+  }, { revenue: 0, gross_profit: 0 });
+}
+
+function toDraftNumber(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : 0;
+}
+
+function formatManualMetricTotal(value) {
+  return Number(value || 0).toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+function normalizeDraftMetricsSource(value) {
+  return value === 'manual_monthly' ? 'manual_monthly' : 'sales_upload';
+}
