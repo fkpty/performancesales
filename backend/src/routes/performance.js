@@ -13,6 +13,15 @@ const { formatMonthLabel } = require('../utils/dateUtils');
 
 const router = express.Router();
 
+function requireUploadAccess(req, res) {
+  if (req.user?.canUploadReports) {
+    return true;
+  }
+
+  res.status(403).json({ error: 'No tienes permisos para subir reportes.' });
+  return false;
+}
+
 router.get('/overview', async (req, res, next) => {
   try {
     const overview = await getPerformanceOverview(req.query);
@@ -52,6 +61,13 @@ router.get('/uploads', async (req, res, next) => {
 router.post('/uploads/:reportType', upload.single('file'), async (req, res, next) => {
   const reportType = normalizeReportType(req.params.reportType);
   const uploadedFile = req.file;
+
+  if (!requireUploadAccess(req, res)) {
+    if (uploadedFile?.path) {
+      await fs.unlink(uploadedFile.path).catch(() => {});
+    }
+    return;
+  }
 
   if (!reportType) {
     if (uploadedFile?.path) {

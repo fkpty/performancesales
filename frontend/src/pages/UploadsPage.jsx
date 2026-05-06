@@ -14,6 +14,7 @@ export default function UploadsPage() {
   const uploads = usePerformanceStore(s => s.uploads);
   const loadUploads = usePerformanceStore(s => s.loadUploads);
   const setUploadsPage = usePerformanceStore(s => s.setUploadsPage);
+  const canUploadReports = usePerformanceStore(s => s.canUploadReports);
   const [showUpload, setShowUpload] = useState(false);
 
   useEffect(() => {
@@ -32,13 +33,15 @@ export default function UploadsPage() {
             </p>
           </div>
 
-          <button
-            onClick={() => setShowUpload(true)}
-            className="bg-primary-container text-on-primary font-body-sm px-md py-sm rounded-lg flex items-center gap-xs hover:opacity-90 transition-opacity"
-          >
-            <span className="material-symbols-outlined text-[18px]">upload_file</span>
-            Subir reportes
-          </button>
+          {canUploadReports && (
+            <button
+              onClick={() => setShowUpload(true)}
+              className="bg-primary-container text-on-primary font-body-sm px-md py-sm rounded-lg flex items-center gap-xs hover:opacity-90 transition-opacity"
+            >
+              <span className="material-symbols-outlined text-[18px]">upload_file</span>
+              Subir reportes
+            </button>
+          )}
         </div>
 
         <div className="overflow-x-auto">

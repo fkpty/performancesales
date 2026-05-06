@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
+import { useLocation } from 'react-router-dom';
 import usePerformanceStore from '../../store/performanceStore';
 import UploadModal from '../UploadModal';
 import GlobalFiltersPanel from '../GlobalFiltersPanel';
@@ -31,14 +32,8 @@ const QUARTERS = [
   { value: 3, label: 'T3' },
   { value: 4, label: 'T4' },
 ];
-const NAV_ITEMS = [
-  { label: 'Panel', icon: 'dashboard', to: '/' },
-  { label: 'Detalle', icon: 'table_view', to: '/reports' },
-  { label: 'Cargas', icon: 'upload_file', to: '/uploads' },
-  { label: 'Ajustes', icon: 'settings', to: '/settings' },
-];
-
 export default function Header() {
+  const location = useLocation();
   const year = usePerformanceStore(s => s.year);
   const period = usePerformanceStore(s => s.period);
   const month = usePerformanceStore(s => s.month);
@@ -51,9 +46,23 @@ export default function Header() {
   const setQuarter = usePerformanceStore(s => s.setQuarter);
   const setCustomRange = usePerformanceStore(s => s.setCustomRange);
   const availableYears = usePerformanceStore(s => s.availableYears);
+  const canUploadReports = usePerformanceStore(s => s.canUploadReports);
+  const authUser = usePerformanceStore(s => s.authUser);
   const years = availableYears.length ? availableYears : FALLBACK_YEARS;
   const [showUpload,  setShowUpload]  = useState(false);
   const [showFilters, setShowFilters] = useState(false);
+  const canManageEfficiencyConfig = hasEfficiencyConfigAccess(authUser);
+  const showEfficiencyMonthSelector = location.pathname === '/efficiency' || location.pathname === '/efficiency-config';
+  const navItems = [
+    { label: 'Panel', icon: 'dashboard', to: '/' },
+    { label: 'Eficiencia', icon: 'speed', to: '/efficiency' },
+    ...(canManageEfficiencyConfig
+      ? [{ label: 'Configuracion eficiencia', icon: 'tune', to: '/efficiency-config' }]
+      : []),
+    { label: 'Detalle', icon: 'table_view', to: '/reports' },
+    { label: 'Cargas', icon: 'upload_file', to: '/uploads' },
+    { label: 'Ajustes', icon: 'settings', to: '/settings' },
+  ];
 
   return (
     <>
@@ -96,7 +105,7 @@ export default function Header() {
               </>
             )}
 
-            {period === 'mensual' && (
+            {(period === 'mensual' || showEfficiencyMonthSelector) && (
               <>
                 <div className="h-4 w-px bg-outline-variant" />
                 <select
@@ -158,20 +167,21 @@ export default function Header() {
               Filtros globales
             </button>
 
-            {/* Source sync/upload */}
-            <button
-              onClick={() => setShowUpload(true)}
-              className="bg-primary-container text-on-primary font-body-sm px-md py-xs rounded-lg flex items-center gap-xs hover:opacity-90 transition-opacity ml-sm"
-            >
-              <span className="material-symbols-outlined text-[18px]">upload_file</span>
-              Subir reportes
-            </button>
+            {canUploadReports && (
+              <button
+                onClick={() => setShowUpload(true)}
+                className="bg-primary-container text-on-primary font-body-sm px-md py-xs rounded-lg flex items-center gap-xs hover:opacity-90 transition-opacity ml-sm"
+              >
+                <span className="material-symbols-outlined text-[18px]">upload_file</span>
+                Subir reportes
+              </button>
+            )}
           </div>
         </div>
 
         <div className="px-lg h-14 border-t border-outline-variant flex items-center justify-between gap-lg overflow-hidden">
           <nav className="flex items-center gap-xs min-w-0 overflow-x-auto py-2">
-            {NAV_ITEMS.map(({ label, icon, to }) => (
+            {navItems.map(({ label, icon, to }) => (
               <NavLink
                 key={to}
                 to={to}
@@ -188,13 +198,15 @@ export default function Header() {
             ))}
           </nav>
 
-          <button
-            onClick={() => setShowUpload(true)}
-            className="shrink-0 bg-primary-container text-on-primary flex items-center justify-center gap-xs py-sm px-md rounded-lg font-body-sm shadow-sm hover:opacity-90 transition-opacity"
-          >
-            <span className="material-symbols-outlined text-[18px]">add</span>
-            Nueva carga
-          </button>
+          {canUploadReports && (
+            <button
+              onClick={() => setShowUpload(true)}
+              className="shrink-0 bg-primary-container text-on-primary flex items-center justify-center gap-xs py-sm px-md rounded-lg font-body-sm shadow-sm hover:opacity-90 transition-opacity"
+            >
+              <span className="material-symbols-outlined text-[18px]">add</span>
+              Nueva carga
+            </button>
+          )}
         </div>
       </header>
 
@@ -202,4 +214,9 @@ export default function Header() {
       {showFilters && <GlobalFiltersPanel onClose={() => setShowFilters(false)} />}
     </>
   );
+}
+
+function hasEfficiencyConfigAccess(user) {
+  const roles = Array.isArray(user?.roles) ? user.roles : [];
+  return roles.some((role) => ['admin', 'super_admin', 'rrhh'].includes(String(role).toLowerCase()));
 }

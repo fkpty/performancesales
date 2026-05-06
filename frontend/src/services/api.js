@@ -10,6 +10,56 @@ const api = axios.create({
   timeout:     30000,
 });
 
+function normalizeRoles(roles) {
+  return Array.isArray(roles)
+    ? roles.map(role => String(role || '').trim().toLowerCase()).filter(Boolean)
+    : [];
+}
+
+function canUploadFromPayload(user, payload) {
+  const payloadRoles = normalizeRoles(user?.roles || payload?.roles);
+  return Boolean(
+    user?.can_upload_reports ||
+    user?.canUploadReports ||
+    payload?.can_upload_reports ||
+    payload?.canUploadReports ||
+    payloadRoles.includes('admin') ||
+    payloadRoles.includes('super_admin') ||
+    user?.name === 'Local Performance Sales Admin' ||
+    user === 'Local Performance Sales Admin'
+  );
+}
+
+function normalizeAuthResponse(payload) {
+  const rawUser = payload?.user;
+
+  if (rawUser && typeof rawUser === 'object') {
+    const roles = normalizeRoles(rawUser.roles || payload?.roles);
+    return {
+      ...payload,
+      user: {
+        ...rawUser,
+        roles,
+        can_upload_reports: canUploadFromPayload(rawUser, payload),
+      },
+    };
+  }
+
+  if (typeof rawUser === 'string' && rawUser.trim() !== '') {
+    const roles = normalizeRoles(payload?.roles);
+    return {
+      ...payload,
+      user: {
+        name: rawUser.trim(),
+        roles,
+        can_upload_reports: canUploadFromPayload({ name: rawUser.trim(), roles }, payload),
+      },
+    };
+  }
+
+  return payload;
+}
+
 export async function initAuthSession(force = false) {
   if (!window.location.pathname.startsWith('/performance-sales')) {
     return { ok: true, local: true };
@@ -19,7 +69,7 @@ export async function initAuthSession(force = false) {
     params: force ? { force: '1' } : undefined,
   });
 
-  return response.data;
+  return normalizeAuthResponse(response.data);
 }
 
 function cleanParams(params = {}) {
@@ -51,6 +101,15 @@ export const uploadPerformanceReport = (reportType, file, onProgress) => {
     },
   }).then(r => r.data);
 };
+
+export const fetchEfficiencyOverview = (params) =>
+  api.get('/efficiency/overview', { params: cleanParams(params) }).then(r => r.data);
+
+export const fetchEfficiencyConfig = (params) =>
+  api.get('/efficiency/config', { params: cleanParams(params) }).then(r => r.data);
+
+export const saveEfficiencyConfig = (params, data) =>
+  api.put('/efficiency/config', data, { params: cleanParams(params) }).then(r => r.data);
 
 // ─── Settings ──────────────────────────────────────────────────
 export const fetchSettings = () =>

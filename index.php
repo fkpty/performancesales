@@ -37,6 +37,7 @@ define('APP_PUBLIC_BASE', contractosEnv('APP_PUBLIC_BASE', detectAppPublicBase()
 define('API_UPSTREAM_BASE', contractosEnv('API_UPSTREAM_BASE', 'http://127.0.0.1:3002'));
 define('API_PROXY_SHARED_SECRET', contractosEnv('API_PROXY_SHARED_SECRET', 'replace_with_shared_proxy_secret'));
 define('APP_TOKEN_COOKIE', contractosEnv('APP_TOKEN_COOKIE', 'performance_sales_token'));
+define('API_UPSTREAM_FALLBACKS', contractosEnv('API_UPSTREAM_FALLBACKS', 'http://10.0.0.187:3002,http://127.0.0.1:3002'));
 
 require_once __DIR__ . '/auth-bridge.php';
 
@@ -80,7 +81,18 @@ if (strpos($requestPath, '/performance-sales/api') === 0) {
         header('Cache-Control: no-store, no-cache');
         $user = validateHubAccess();
         if ($user) {
-            echo json_encode(['ok' => true, 'user' => $user['user_name']]);
+            echo json_encode([
+                'ok' => true,
+                'roles' => array_values($user['user_roles'] ?? []),
+                'can_upload_reports' => !empty($user['can_upload_reports']),
+                'user' => [
+                    'id' => $user['user_id'] ?? null,
+                    'name' => $user['user_name'] ?? '',
+                    'email' => $user['user_email'] ?? '',
+                    'roles' => array_values($user['user_roles'] ?? []),
+                    'can_upload_reports' => !empty($user['can_upload_reports']),
+                ],
+            ]);
         } else {
             http_response_code(401);
             echo json_encode(['ok' => false, 'error' => 'No autorizado']);
@@ -147,11 +159,35 @@ code{background:#f1f5f9;padding:2px 8px;border-radius:4px;font-size:13px;}
 
 // Output the built SPA
 header('Content-Type: text/html; charset=UTF-8');
+header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+header('Pragma: no-cache');
 // Security headers (no X-Frame-Options – allow same-origin iframe embedding)
 header('X-Content-Type-Options: nosniff');
 header('Referrer-Policy: strict-origin-when-cross-origin');
 header("Content-Security-Policy: frame-ancestors 'self' https://hub.collab.grouppbs.com https://10.0.0.187");
-readfile($indexFile);
+
+$html = file_get_contents($indexFile);
+if ($html === false) {
+    http_response_code(500);
+    echo 'No se pudo leer el frontend compilado.';
+    exit;
+}
+
+$bootstrapAuth = json_encode([
+    'id' => $user['user_id'] ?? null,
+    'name' => $user['user_name'] ?? '',
+    'email' => $user['user_email'] ?? '',
+    'roles' => array_values($user['user_roles'] ?? []),
+    'can_upload_reports' => !empty($user['can_upload_reports']),
+], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+
+$bootstrapScript = "<script>window.__PERFORMANCE_SALES_AUTH__={$bootstrapAuth};</script>";
+
+if (strpos($html, '</head>') !== false) {
+    echo str_replace('</head>', $bootstrapScript . '</head>', $html);
+} else {
+    echo $bootstrapScript . $html;
+}
 
 function proxyApiRequest(string $requestUri, array $user): void
 {
@@ -165,9 +201,6 @@ function proxyApiRequest(string $requestUri, array $user): void
     $path = parse_url($requestUri, PHP_URL_PATH) ?: '/performance-sales/api';
     $query = parse_url($requestUri, PHP_URL_QUERY);
     $upstreamPath = preg_replace('#^/performance-sales/api#', '/api', $path, 1);
-    $targetUrl = API_UPSTREAM_BASE . $upstreamPath . ($query ? ('?' . $query) : '');
-
-    $ch = curl_init($targetUrl);
     $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
     $rawBody = file_get_contents('php://input');
 
@@ -192,6 +225,8 @@ function proxyApiRequest(string $requestUri, array $user): void
     $forwardHeaders[] = 'X-Performance-Sales-User-Id: ' . rawurlencode((string) ($user['user_id'] ?? ''));
     $forwardHeaders[] = 'X-Performance-Sales-User-Name: ' . rawurlencode((string) ($user['user_name'] ?? ''));
     $forwardHeaders[] = 'X-Performance-Sales-User-Email: ' . rawurlencode((string) ($user['user_email'] ?? ''));
+    $forwardHeaders[] = 'X-Performance-Sales-User-Roles: ' . rawurlencode(json_encode(array_values($user['user_roles'] ?? [])));
+    $forwardHeaders[] = 'X-Performance-Sales-Can-Upload: ' . (!empty($user['can_upload_reports']) ? '1' : '0');
 
     if (!empty($_COOKIE)) {
         $cookiePairs = [];
@@ -200,6 +235,63 @@ function proxyApiRequest(string $requestUri, array $user): void
         }
         $forwardHeaders[] = 'Cookie: ' . implode('; ', $cookiePairs);
     }
+
+    $result = null;
+    $errors = [];
+
+    foreach (getApiUpstreamCandidates() as $upstreamBase) {
+        $targetUrl = rtrim($upstreamBase, '/') . $upstreamPath . ($query ? ('?' . $query) : '');
+        $attempt = forwardRequestToApi($targetUrl, $method, $rawBody, $isMultipartUpload, $forwardHeaders);
+
+        if ($attempt['ok']) {
+            $result = $attempt;
+            break;
+        }
+
+        $errors[] = $attempt['error'];
+    }
+
+    if ($result === null) {
+        http_response_code(502);
+        header('Content-Type: application/json; charset=UTF-8');
+        echo json_encode(['error' => implode(' | ', $errors) ?: 'No se pudo conectar con la API backend.']);
+        return;
+    }
+
+    $status = $result['status'];
+    $rawHeaders = $result['headers'];
+    $body = $result['body'];
+
+    http_response_code($status);
+    foreach (explode("\r\n", $rawHeaders) as $headerLine) {
+        if (strpos($headerLine, ':') === false) {
+            continue;
+        }
+        [$name, $value] = explode(':', $headerLine, 2);
+        $name = trim($name);
+        $value = trim($value);
+        if ($name === '' || in_array(strtolower($name), ['transfer-encoding', 'content-encoding', 'connection'], true)) {
+            continue;
+        }
+        header($name . ': ' . $value, false);
+    }
+
+    echo $body;
+}
+
+function getApiUpstreamCandidates(): array
+{
+    $candidates = array_merge(
+        [API_UPSTREAM_BASE],
+        array_map('trim', explode(',', API_UPSTREAM_FALLBACKS))
+    );
+
+    return array_values(array_unique(array_filter($candidates, static fn ($candidate): bool => $candidate !== '')));
+}
+
+function forwardRequestToApi(string $targetUrl, string $method, $rawBody, bool $isMultipartUpload, array $forwardHeaders): array
+{
+    $ch = curl_init($targetUrl);
 
     curl_setopt_array($ch, [
         CURLOPT_CUSTOMREQUEST => $method,
@@ -232,12 +324,13 @@ function proxyApiRequest(string $requestUri, array $user): void
 
     $response = curl_exec($ch);
     if ($response === false) {
-        $error = curl_error($ch) ?: 'No se pudo conectar con la API backend.';
+        $error = curl_error($ch) ?: ('No se pudo conectar con la API backend en ' . $targetUrl);
         curl_close($ch);
-        http_response_code(502);
-        header('Content-Type: application/json; charset=UTF-8');
-        echo json_encode(['error' => $error]);
-        return;
+
+        return [
+            'ok' => false,
+            'error' => $error,
+        ];
     }
 
     $status = curl_getinfo($ch, CURLINFO_RESPONSE_CODE) ?: 502;
@@ -246,21 +339,12 @@ function proxyApiRequest(string $requestUri, array $user): void
     $body = substr($response, $headerSize);
     curl_close($ch);
 
-    http_response_code($status);
-    foreach (explode("\r\n", $rawHeaders) as $headerLine) {
-        if (strpos($headerLine, ':') === false) {
-            continue;
-        }
-        [$name, $value] = explode(':', $headerLine, 2);
-        $name = trim($name);
-        $value = trim($value);
-        if ($name === '' || in_array(strtolower($name), ['transfer-encoding', 'content-encoding', 'connection'], true)) {
-            continue;
-        }
-        header($name . ': ' . $value, false);
-    }
-
-    echo $body;
+    return [
+        'ok' => true,
+        'status' => $status,
+        'headers' => $rawHeaders,
+        'body' => $body,
+    ];
 }
 
 function getallheadersSafe(): array

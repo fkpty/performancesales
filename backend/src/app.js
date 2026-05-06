@@ -11,6 +11,7 @@ const uploadRoute    = require('./routes/upload');
 const contractsRoute = require('./routes/contracts');
 const analyticsRoute = require('./routes/analytics');
 const performanceRoute = require('./routes/performance');
+const efficiencyRoute = require('./routes/efficiency');
 const settingsRoute  = require('./routes/settings');
 
 const app  = express();
@@ -73,6 +74,7 @@ app.use('/api/upload',    uploadRoute);
 app.use('/api/contracts', contractsRoute);
 app.use('/api/analytics', analyticsRoute);
 app.use('/api/performance', performanceRoute);
+app.use('/api/efficiency', efficiencyRoute);
 app.use('/api/settings',  settingsRoute);
 
 app.use('/performance-sales', express.static(publicDir));

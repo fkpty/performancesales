@@ -42,6 +42,10 @@ $TOOL_URL_PATTERN   = contractosRegisterGlobalConfig('TOOL_URL_PATTERN', getenv(
 $EMBED_SHARED_SECRET = contractosRegisterGlobalConfig('EMBED_SHARED_SECRET', getenv('PERFORMANCE_SALES_EMBED_SECRET') ?: 'replace_with_embed_secret');
 $EMBED_MAX_AGE_SECONDS = contractosRegisterGlobalConfig('EMBED_MAX_AGE_SECONDS', 300);
 $APP_ALLOW_LOCAL_DEV_AUTH = contractosRegisterGlobalConfig('APP_ALLOW_LOCAL_DEV_AUTH', getenv('APP_ALLOW_LOCAL_DEV_AUTH') ?: '0');
+$UPLOAD_ADMIN_EMAILS = contractosRegisterGlobalConfig(
+    'UPLOAD_ADMIN_EMAILS',
+    getenv('PERFORMANCE_SALES_UPLOAD_ADMIN_EMAILS') ?: 'helpdeskpanama@pbs.group,luis.alegria@pbs.group'
+);
 
 function contractosCookieSameSite(): string
 {
@@ -94,21 +98,37 @@ function validateHubAccess(): ?array
         $_SESSION['user_id'] = 1;
         $_SESSION['user_name'] = 'Local Performance Sales Admin';
         $_SESSION['user_email'] = 'local@performance-sales.test';
+        $_SESSION['user_roles'] = ['super_admin'];
+        $_SESSION['can_upload_reports'] = true;
         $_SESSION['expires_at'] = time() + $TOKEN_TTL_HOURS * 3600;
 
         return [
             'user_id' => 1,
             'user_name' => 'Local Performance Sales Admin',
             'user_email' => 'local@performance-sales.test',
+            'user_roles' => ['super_admin'],
+            'can_upload_reports' => true,
         ];
     }
 
     if (!empty($_SESSION['user_id']) && !empty($_SESSION['expires_at']) && $_SESSION['expires_at'] > time()) {
-        return [
+        $userData = resolveUserAccessMetadata(null, [
             'user_id'    => $_SESSION['user_id'],
             'user_name'  => $_SESSION['user_name'],
             'user_email' => $_SESSION['user_email'],
-        ];
+            'user_roles' => $_SESSION['user_roles'] ?? [],
+            'can_upload_reports' => !empty($_SESSION['can_upload_reports']),
+        ]);
+
+        if ($userData['user_roles'] === [] || !$userData['can_upload_reports']) {
+            $hubDb = connectDB($HUB_DB_HOST, $HUB_DB_PORT, $HUB_DB_USER, $HUB_DB_PASS, $HUB_DB_NAME);
+            $userData = resolveUserAccessMetadata($hubDb, $userData);
+        }
+
+        $_SESSION['user_roles'] = $userData['user_roles'];
+        $_SESSION['can_upload_reports'] = $userData['can_upload_reports'];
+
+        return $userData;
     }
 
     // 1b. Check existing contractos_token in DB
@@ -118,13 +138,34 @@ function validateHubAccess(): ?array
             $appDb = connectDB($APP_DB_HOST, $APP_DB_PORT, $APP_DB_USER, $APP_DB_PASS, $APP_DB_NAME);
             if ($appDb) {
                 $stmt = $appDb->prepare(
-                    'SELECT user_id, user_name, user_email FROM contractos_sessions
+                    'SELECT user_id, user_name, user_email, user_roles_json, can_upload_reports FROM contractos_sessions
                       WHERE token = ? AND expires_at > NOW() LIMIT 1'
                 );
                 $stmt->execute([$token]);
                 $row = $stmt->fetch(PDO::FETCH_ASSOC);
                 if ($row) {
-                    return $row; // Still valid
+                    $userData = resolveUserAccessMetadata(null, [
+                        'user_id' => (int) $row['user_id'],
+                        'user_name' => $row['user_name'],
+                        'user_email' => $row['user_email'],
+                        'user_roles' => normalizeStoredRoles($row['user_roles_json'] ?? null),
+                        'can_upload_reports' => !empty($row['can_upload_reports']),
+                    ]);
+
+                    if ($userData['user_roles'] === [] || !$userData['can_upload_reports']) {
+                        $hubDb = connectDB($HUB_DB_HOST, $HUB_DB_PORT, $HUB_DB_USER, $HUB_DB_PASS, $HUB_DB_NAME);
+                        $userData = resolveUserAccessMetadata($hubDb, $userData);
+                        persistSessionAccessMetadata($appDb, $token, $userData);
+                    }
+
+                    $_SESSION['user_id'] = $userData['user_id'];
+                    $_SESSION['user_name'] = $userData['user_name'];
+                    $_SESSION['user_email'] = $userData['user_email'];
+                    $_SESSION['user_roles'] = $userData['user_roles'];
+                    $_SESSION['can_upload_reports'] = $userData['can_upload_reports'];
+                    $_SESSION['expires_at'] = time() + $TOKEN_TTL_HOURS * 3600;
+
+                    return $userData;
                 }
             }
         }
@@ -217,11 +258,11 @@ function validateHubAccess(): ?array
     // 6. Issue contractos_token (DB) or fall back to PHP session
     $userName  = trim($user['first_name'] . ' ' . $user['last_name']);
     $expiresTs = time() + $TOKEN_TTL_HOURS * 3600;
-    $userData  = [
+    $userData  = attachUserAccessMetadata($hubDb, [
         'user_id'    => $userId,
         'user_name'  => $userName,
         'user_email' => $user['email'],
-    ];
+    ]);
     $secure = isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off';
     $sameSite = contractosCookieSameSite();
 
@@ -230,6 +271,8 @@ function validateHubAccess(): ?array
     $_SESSION['user_id']    = $userId;
     $_SESSION['user_name']  = $userName;
     $_SESSION['user_email'] = $user['email'];
+    $_SESSION['user_roles'] = $userData['user_roles'];
+    $_SESSION['can_upload_reports'] = $userData['can_upload_reports'];
     $_SESSION['expires_at'] = $expiresTs;
 
     $appDb = connectDB($APP_DB_HOST, $APP_DB_PORT, $APP_DB_USER, $APP_DB_PASS, $APP_DB_NAME);
@@ -237,10 +280,18 @@ function validateHubAccess(): ?array
         $token   = bin2hex(random_bytes(32)); // 64 char hex
         $expires = date('Y-m-d H:i:s', $expiresTs);
         $stmt    = $appDb->prepare(
-            'INSERT INTO contractos_sessions (token, user_id, user_name, user_email, expires_at)
-             VALUES (?, ?, ?, ?, ?)'
+            'INSERT INTO contractos_sessions (token, user_id, user_name, user_email, user_roles_json, can_upload_reports, expires_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)'
         );
-        $stmt->execute([$token, $userId, $userName, $user['email'], $expires]);
+        $stmt->execute([
+            $token,
+            $userId,
+            $userName,
+            $user['email'],
+            json_encode($userData['user_roles'], JSON_UNESCAPED_SLASHES),
+            $userData['can_upload_reports'] ? 1 : 0,
+            $expires,
+        ]);
 
         setcookie(
             $APP_TOKEN_COOKIE,
@@ -257,6 +308,115 @@ function validateHubAccess(): ?array
     }
 
     return $userData;
+}
+
+function attachUserAccessMetadata(?PDO $hubDb, array $userData): array
+{
+    $userId = isset($userData['user_id']) ? (int) $userData['user_id'] : 0;
+    $roles = $hubDb && $userId > 0 ? getHubUserRoleNames($hubDb, $userId) : [];
+
+    $userData['user_roles'] = $roles;
+    $userData['can_upload_reports'] = canUserUploadReports($roles)
+        || userEmailHasUploadAccess($userData['user_email'] ?? null);
+
+    return $userData;
+}
+
+function resolveUserAccessMetadata(?PDO $hubDb, array $userData): array
+{
+    $userData['user_roles'] = normalizeStoredRoles($userData['user_roles'] ?? []);
+    $userData['can_upload_reports'] = !empty($userData['can_upload_reports'])
+        || canUserUploadReports($userData['user_roles'])
+        || userEmailHasUploadAccess($userData['user_email'] ?? null);
+
+    if ($hubDb && ($userData['user_roles'] === [] || !$userData['can_upload_reports'])) {
+        return attachUserAccessMetadata($hubDb, $userData);
+    }
+
+    return $userData;
+}
+
+function normalizeStoredRoles($storedRoles): array
+{
+    if (is_array($storedRoles)) {
+        return array_values(array_unique(array_filter(array_map(
+            static fn ($role): string => strtolower(trim((string) $role)),
+            $storedRoles
+        ))));
+    }
+
+    if (!is_string($storedRoles) || trim($storedRoles) === '') {
+        return [];
+    }
+
+    $decoded = json_decode($storedRoles, true);
+    if (!is_array($decoded)) {
+        return [];
+    }
+
+    return array_values(array_unique(array_filter(array_map(
+        static fn ($role): string => strtolower(trim((string) $role)),
+        $decoded
+    ))));
+}
+
+function persistSessionAccessMetadata(PDO $appDb, string $token, array $userData): void
+{
+    $stmt = $appDb->prepare(
+        'UPDATE contractos_sessions
+            SET user_roles_json = ?, can_upload_reports = ?
+          WHERE token = ?'
+    );
+
+    $stmt->execute([
+        json_encode(array_values($userData['user_roles'] ?? []), JSON_UNESCAPED_SLASHES),
+        !empty($userData['can_upload_reports']) ? 1 : 0,
+        $token,
+    ]);
+}
+
+function getHubUserRoleNames(PDO $hubDb, int $userId): array
+{
+    $stmt = $hubDb->prepare(
+        'SELECT r.name
+           FROM model_has_roles mhr
+           INNER JOIN roles r ON r.id = mhr.role_id
+          WHERE mhr.model_type = ? AND mhr.model_id = ?'
+    );
+    $stmt->execute(['App\\Models\\User', $userId]);
+
+    return array_values(array_unique(array_filter(array_map(
+        static fn ($roleName): string => strtolower(trim((string) $roleName)),
+        $stmt->fetchAll(PDO::FETCH_COLUMN) ?: []
+    ))));
+}
+
+function canUserUploadReports(array $roles): bool
+{
+    $normalizedRoles = array_map(
+        static fn ($role): string => strtolower(trim((string) $role)),
+        $roles
+    );
+
+    return in_array('admin', $normalizedRoles, true)
+        || in_array('super_admin', $normalizedRoles, true);
+}
+
+function userEmailHasUploadAccess(?string $email): bool
+{
+    global $UPLOAD_ADMIN_EMAILS;
+
+    $normalizedEmail = strtolower(trim((string) $email));
+    if ($normalizedEmail === '') {
+        return false;
+    }
+
+    $allowedEmails = array_values(array_filter(array_map(
+        static fn ($value): string => strtolower(trim((string) $value)),
+        explode(',', (string) $UPLOAD_ADMIN_EMAILS)
+    )));
+
+    return in_array($normalizedEmail, $allowedEmails, true);
 }
 
 function getTrustedLaunchUser(): ?array

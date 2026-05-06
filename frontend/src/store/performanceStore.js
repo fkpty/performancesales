@@ -11,6 +11,11 @@ const currentYear = today.getFullYear();
 const currentMonth = today.getMonth() + 1;
 const currentQuarter = Math.ceil(currentMonth / 3);
 
+function hasUploadRole(user) {
+  const roles = Array.isArray(user?.roles) ? user.roles : [];
+  return roles.some((role) => ['admin', 'super_admin'].includes(String(role).toLowerCase()));
+}
+
 function buildDateParams(state) {
   const params = {
     period: state.period,
@@ -68,6 +73,9 @@ function createUploadsState() {
 }
 
 const usePerformanceStore = create((set, get) => ({
+  authUser: null,
+  canUploadReports: false,
+
   year: currentYear,
   period: 'anual',
   month: currentMonth,
@@ -98,6 +106,18 @@ const usePerformanceStore = create((set, get) => ({
   availableYears: [],
 
   requestId: 0,
+
+  setAuthUser: (user) => {
+    const normalizedUser = user && typeof user === 'object' ? user : null;
+    set({
+      authUser: normalizedUser,
+      canUploadReports: Boolean(
+        normalizedUser?.can_upload_reports ||
+        normalizedUser?.canUploadReports ||
+        hasUploadRole(normalizedUser)
+      ),
+    });
+  },
 
   setYear: (year) => {
     set(state => ({

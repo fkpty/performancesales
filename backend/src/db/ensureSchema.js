@@ -1,6 +1,10 @@
 const pool = require('./connection');
 
 const STATEMENTS = [
+  `ALTER TABLE contractos_sessions
+      ADD COLUMN IF NOT EXISTS user_roles_json JSON NULL AFTER user_email`,
+  `ALTER TABLE contractos_sessions
+      ADD COLUMN IF NOT EXISTS can_upload_reports TINYINT(1) NOT NULL DEFAULT 0 AFTER user_roles_json`,
   `CREATE TABLE IF NOT EXISTS performance_sales_upload_batches (
     id                BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
     report_type       ENUM('it','xerox') NOT NULL,
@@ -58,6 +62,75 @@ const STATEMENTS = [
     INDEX idx_ps_rows_serial (serial_number),
     INDEX idx_ps_rows_business (business_unit)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  `CREATE TABLE IF NOT EXISTS performance_efficiency_period_settings (
+    id                    BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    sheet_type            ENUM('sales_productivity','presales') NOT NULL,
+    config_month          DATE            NOT NULL,
+    report_year           SMALLINT UNSIGNED NOT NULL,
+    ytd_month_number      TINYINT UNSIGNED NOT NULL DEFAULT 1,
+    created_by            BIGINT          NULL,
+    updated_by            BIGINT          NULL,
+    created_at            DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at            DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_eff_period (sheet_type, config_month),
+    INDEX idx_eff_period_year (report_year)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  `CREATE TABLE IF NOT EXISTS performance_efficiency_groups (
+    id                         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    sheet_type                 ENUM('sales_productivity','presales') NOT NULL,
+    config_month               DATE            NOT NULL,
+    group_name                 VARCHAR(255)    NOT NULL DEFAULT '',
+    manager_name               VARCHAR(255)    NOT NULL DEFAULT '',
+    manager_user_id            BIGINT          NULL,
+    total_salary_amount        DECIMAL(15,4)   NULL DEFAULT NULL,
+    total_salary_divisor       DECIMAL(15,4)   NOT NULL DEFAULT 1,
+    total_salary_multiplier    DECIMAL(15,4)   NOT NULL DEFAULT 1,
+    total_salary_months_mode   ENUM('period','months_in_role','custom') NOT NULL DEFAULT 'period',
+    total_salary_months_custom TINYINT UNSIGNED NULL DEFAULT NULL,
+    sort_order                 INT             NOT NULL DEFAULT 0,
+    created_by                 BIGINT          NULL,
+    updated_by                 BIGINT          NULL,
+    created_at                 DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at                 DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_eff_group (sheet_type, config_month, group_name),
+    INDEX idx_eff_group_manager (manager_user_id),
+    INDEX idx_eff_group_sort (sheet_type, config_month, sort_order)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  `CREATE TABLE IF NOT EXISTS performance_efficiency_members (
+    id                      BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    group_id                BIGINT UNSIGNED NOT NULL,
+    sheet_type              ENUM('sales_productivity','presales') NOT NULL,
+    config_month            DATE            NOT NULL,
+    employee_id             VARCHAR(100)    NOT NULL DEFAULT '',
+    seller_name             VARCHAR(255)    NOT NULL DEFAULT '',
+    market_segment          VARCHAR(255)    NOT NULL DEFAULT '',
+    months_in_role_label    VARCHAR(50)     NOT NULL DEFAULT '',
+    months_in_role_value    TINYINT UNSIGNED NULL DEFAULT NULL,
+    yearly_printing_target  DECIMAL(15,2)   NULL DEFAULT NULL,
+    yearly_it_other_target  DECIMAL(15,2)   NULL DEFAULT NULL,
+    yearly_rental_target    DECIMAL(15,2)   NULL DEFAULT NULL,
+    yearly_total_target     DECIMAL(15,2)   NULL DEFAULT NULL,
+    yearly_gp_target_rate   DECIMAL(10,6)   NULL DEFAULT NULL,
+    plan_months_mode        ENUM('period','months_in_role','custom') NOT NULL DEFAULT 'period',
+    plan_months_custom      TINYINT UNSIGNED NULL DEFAULT NULL,
+    salary_amount           DECIMAL(15,4)   NULL DEFAULT NULL,
+    salary_divisor          DECIMAL(15,4)   NOT NULL DEFAULT 1,
+    salary_multiplier       DECIMAL(15,4)   NOT NULL DEFAULT 1,
+    salary_months_mode      ENUM('period','months_in_role','custom') NOT NULL DEFAULT 'period',
+    salary_months_custom    TINYINT UNSIGNED NULL DEFAULT NULL,
+    is_other_row            TINYINT(1)      NOT NULL DEFAULT 0,
+    sort_order              INT             NOT NULL DEFAULT 0,
+    created_by              BIGINT          NULL,
+    updated_by              BIGINT          NULL,
+    created_at              DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at              DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_eff_member (sheet_type, config_month, group_id, seller_name, is_other_row),
+    INDEX idx_eff_member_group (group_id),
+    INDEX idx_eff_member_lookup (sheet_type, config_month, seller_name),
+    INDEX idx_eff_member_sort (group_id, sort_order)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  `ALTER TABLE performance_efficiency_members
+      ADD COLUMN IF NOT EXISTS employee_id VARCHAR(100) NOT NULL DEFAULT '' AFTER config_month`,
   `CREATE TABLE IF NOT EXISTS contract_series (
     id                    BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
     segment               VARCHAR(255)    NOT NULL DEFAULT '',

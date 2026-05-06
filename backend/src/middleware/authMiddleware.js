@@ -10,18 +10,20 @@ const ALLOW_LOCAL_DEV_AUTH = process.env.ALLOW_LOCAL_DEV_AUTH === '1';
 
 async function authMiddleware(req, res, next) {
   try {
+    const proxyUser = getTrustedProxyUser(req.headers);
+    if (proxyUser) {
+      req.user = proxyUser;
+      return next();
+    }
+
     if (ALLOW_LOCAL_DEV_AUTH && isLocalRequest(req)) {
       req.user = {
         id: 1,
         name: 'Local Performance Sales Admin',
         email: 'local@performance-sales.test',
+        roles: ['super_admin'],
+        canUploadReports: true,
       };
-      return next();
-    }
-
-    const proxyUser = getTrustedProxyUser(req.headers);
-    if (proxyUser) {
-      req.user = proxyUser;
       return next();
     }
 
@@ -48,6 +50,8 @@ async function authMiddleware(req, res, next) {
       id:    rows[0].user_id,
       name:  rows[0].user_name,
       email: rows[0].user_email,
+      roles: [],
+      canUploadReports: false,
     };
 
     next();
@@ -95,6 +99,8 @@ function getTrustedProxyUser(headers) {
   const id = decodeHeaderValue(headers['x-performance-sales-user-id']);
   const name = decodeHeaderValue(headers['x-performance-sales-user-name']);
   const email = decodeHeaderValue(headers['x-performance-sales-user-email']);
+  const roles = decodeJsonHeaderValue(headers['x-performance-sales-user-roles']);
+  const canUploadReports = String(headers['x-performance-sales-can-upload'] || '') === '1';
 
   if (!id || !name) {
     return null;
@@ -104,7 +110,22 @@ function getTrustedProxyUser(headers) {
     id,
     name,
     email: email || null,
+    roles: Array.isArray(roles) ? roles : [],
+    canUploadReports,
   };
+}
+
+function decodeJsonHeaderValue(value) {
+  const decoded = decodeHeaderValue(value);
+  if (!decoded) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(decoded);
+  } catch {
+    return null;
+  }
 }
 
 function decodeHeaderValue(value) {

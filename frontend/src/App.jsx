@@ -2,10 +2,22 @@ import { useEffect, useState } from 'react';
 import { HashRouter, Routes, Route } from 'react-router-dom';
 import Layout        from './components/layout/Layout';
 import DashboardPage from './pages/DashboardPage';
+import EfficiencyPage from './pages/EfficiencyPage';
+import EfficiencyConfigPage from './pages/EfficiencyConfigPage';
 import ReportsPage   from './pages/ReportsPage';
 import UploadsPage   from './pages/UploadsPage';
 import SettingsPage  from './pages/SettingsPage';
 import { initAuthSession } from './services/api';
+import usePerformanceStore from './store/performanceStore';
+
+function getBootstrapAuthUser() {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  const user = window.__PERFORMANCE_SALES_AUTH__;
+  return user && typeof user === 'object' ? user : null;
+}
 
 /**
  * Ping the PHP auth-init endpoint on every app load.
@@ -14,14 +26,28 @@ import { initAuthSession } from './services/api';
 export default function App() {
   const [authReady, setAuthReady] = useState(false);
   const [authError, setAuthError] = useState('');
+  const setAuthUser = usePerformanceStore(s => s.setAuthUser);
 
   useEffect(() => {
-    initAuthSession().catch(() => {
-      setAuthError('No se pudo validar la sesión de PBS Hub para Performance Sales.');
-    }).finally(() => {
+    const bootstrapUser = getBootstrapAuthUser();
+    if (bootstrapUser) {
+      setAuthUser(bootstrapUser);
       setAuthReady(true);
-    });
-  }, []);
+      return;
+    }
+
+    initAuthSession()
+      .then((response) => {
+        setAuthUser(response?.user || null);
+      })
+      .catch(() => {
+        setAuthUser(null);
+        setAuthError('No se pudo validar la sesión de PBS Hub para Performance Sales.');
+      })
+      .finally(() => {
+        setAuthReady(true);
+      });
+  }, [setAuthUser]);
 
   if (!authReady) {
     return (
@@ -62,6 +88,8 @@ export default function App() {
       <Layout>
         <Routes>
           <Route path="/"         element={<DashboardPage />} />
+          <Route path="/efficiency" element={<EfficiencyPage />} />
+          <Route path="/efficiency-config" element={<EfficiencyConfigPage />} />
           <Route path="/reports"  element={<ReportsPage />} />
           <Route path="/uploads"  element={<UploadsPage />} />
           <Route path="/settings" element={<SettingsPage />} />

@@ -15,6 +15,8 @@ CREATE TABLE IF NOT EXISTS contractos_sessions (
   user_id      BIGINT       NOT NULL,
   user_name    VARCHAR(255) NOT NULL,
   user_email   VARCHAR(255) NOT NULL,
+  user_roles_json JSON      NULL,
+  can_upload_reports TINYINT(1) NOT NULL DEFAULT 0,
   expires_at   DATETIME     NOT NULL,
   created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   INDEX idx_user (user_id),
@@ -224,4 +226,77 @@ CREATE TABLE IF NOT EXISTS performance_sales_rows (
   INDEX idx_ps_rows_invoice (invoice_number),
   INDEX idx_ps_rows_serial (serial_number),
   INDEX idx_ps_rows_business (business_unit)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- Performance Sales efficiency workbook configuration
+-- ============================================================
+CREATE TABLE IF NOT EXISTS performance_efficiency_period_settings (
+  id                    BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  sheet_type            ENUM('sales_productivity','presales') NOT NULL,
+  config_month          DATE            NOT NULL COMMENT 'Primer dia del mes configurado',
+  report_year           SMALLINT UNSIGNED NOT NULL,
+  ytd_month_number      TINYINT UNSIGNED NOT NULL DEFAULT 1,
+  created_by            BIGINT          NULL,
+  updated_by            BIGINT          NULL,
+  created_at            DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at            DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_eff_period (sheet_type, config_month),
+  INDEX idx_eff_period_year (report_year)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS performance_efficiency_groups (
+  id                         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  sheet_type                 ENUM('sales_productivity','presales') NOT NULL,
+  config_month               DATE            NOT NULL COMMENT 'Primer dia del mes configurado',
+  group_name                 VARCHAR(255)    NOT NULL DEFAULT '',
+  manager_name               VARCHAR(255)    NOT NULL DEFAULT '',
+  manager_user_id            BIGINT          NULL,
+  total_salary_amount        DECIMAL(15,4)   NULL DEFAULT NULL COMMENT 'Valor dentro del parentesis de SALARY FULLY LOADED para el total del grupo',
+  total_salary_divisor       DECIMAL(15,4)   NOT NULL DEFAULT 1,
+  total_salary_multiplier    DECIMAL(15,4)   NOT NULL DEFAULT 1,
+  total_salary_months_mode   ENUM('period','months_in_role','custom') NOT NULL DEFAULT 'period',
+  total_salary_months_custom TINYINT UNSIGNED NULL DEFAULT NULL,
+  sort_order                 INT             NOT NULL DEFAULT 0,
+  created_by                 BIGINT          NULL,
+  updated_by                 BIGINT          NULL,
+  created_at                 DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at                 DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_eff_group (sheet_type, config_month, group_name),
+  INDEX idx_eff_group_manager (manager_user_id),
+  INDEX idx_eff_group_sort (sheet_type, config_month, sort_order)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS performance_efficiency_members (
+  id                      BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  group_id                BIGINT UNSIGNED NOT NULL,
+  sheet_type              ENUM('sales_productivity','presales') NOT NULL,
+  config_month            DATE            NOT NULL COMMENT 'Primer dia del mes configurado',
+  employee_id             VARCHAR(100)    NOT NULL DEFAULT '',
+  seller_name             VARCHAR(255)    NOT NULL DEFAULT '',
+  market_segment          VARCHAR(255)    NOT NULL DEFAULT '',
+  months_in_role_label    VARCHAR(50)     NOT NULL DEFAULT '',
+  months_in_role_value    TINYINT UNSIGNED NULL DEFAULT NULL,
+  yearly_printing_target  DECIMAL(15,2)   NULL DEFAULT NULL,
+  yearly_it_other_target  DECIMAL(15,2)   NULL DEFAULT NULL,
+  yearly_rental_target    DECIMAL(15,2)   NULL DEFAULT NULL,
+  yearly_total_target     DECIMAL(15,2)   NULL DEFAULT NULL,
+  yearly_gp_target_rate   DECIMAL(10,6)   NULL DEFAULT NULL,
+  plan_months_mode        ENUM('period','months_in_role','custom') NOT NULL DEFAULT 'period',
+  plan_months_custom      TINYINT UNSIGNED NULL DEFAULT NULL,
+  salary_amount           DECIMAL(15,4)   NULL DEFAULT NULL COMMENT 'Valor editable dentro del parentesis de SALARY FULLY LOADED',
+  salary_divisor          DECIMAL(15,4)   NOT NULL DEFAULT 1,
+  salary_multiplier       DECIMAL(15,4)   NOT NULL DEFAULT 1,
+  salary_months_mode      ENUM('period','months_in_role','custom') NOT NULL DEFAULT 'period',
+  salary_months_custom    TINYINT UNSIGNED NULL DEFAULT NULL,
+  is_other_row            TINYINT(1)      NOT NULL DEFAULT 0,
+  sort_order              INT             NOT NULL DEFAULT 0,
+  created_by              BIGINT          NULL,
+  updated_by              BIGINT          NULL,
+  created_at              DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at              DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_eff_member (sheet_type, config_month, group_id, seller_name, is_other_row),
+  INDEX idx_eff_member_group (group_id),
+  INDEX idx_eff_member_lookup (sheet_type, config_month, seller_name),
+  INDEX idx_eff_member_sort (group_id, sort_order)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
