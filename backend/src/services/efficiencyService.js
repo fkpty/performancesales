@@ -32,20 +32,24 @@ async function getEfficiencyOverview(params = {}) {
 }
 
 async function getEfficiencyConfig(params = {}) {
-  const configMonth = await resolveConfigMonth(params);
-  await ensureEfficiencySeed(configMonth);
-  return readEfficiencyConfig(configMonth);
+  const templateConfigMonth = await resolveTemplateConfigMonth(params);
+  const context = resolveEfficiencyContext(params, templateConfigMonth);
+  await ensureEfficiencySeed(templateConfigMonth);
+  return readEfficiencyConfig(templateConfigMonth, context);
 }
 
 async function saveEfficiencyConfig(params = {}, payload = {}, user = null) {
-  const configMonth = await resolveConfigMonth({
+  const templateConfigMonth = await resolveTemplateConfigMonth({
+    templateConfigMonth: payload.template_config_month || payload.templateConfigMonth || params.templateConfigMonth || params.template_config_month,
+  });
+  const context = resolveEfficiencyContext({
     configMonth: payload.config_month || payload.configMonth || params.configMonth || params.config_month,
     year: params.year,
     month: params.month,
-  });
-  const normalized = normalizeConfigPayload(payload, configMonth);
-  await replaceEfficiencyConfig(configMonth, normalized, user?.id || null);
-  return readEfficiencyConfig(configMonth);
+  }, templateConfigMonth);
+  const normalized = normalizeConfigPayload(payload, templateConfigMonth);
+  await replaceEfficiencyConfig(templateConfigMonth, normalized, user?.id || null);
+  return readEfficiencyConfig(templateConfigMonth, context);
 }
 
 async function buildSheetOverview(sheetConfig) {
@@ -542,6 +546,65 @@ async function resolveConfigMonth(params = {}) {
   return currentMonthStart();
 }
 
+async function resolveTemplateConfigMonth(params = {}) {
+  const explicit = normalizeConfigMonth(params.templateConfigMonth || params.template_config_month);
+  if (explicit) {
+    return explicit;
+  }
+
+  const [[configRow]] = await pool.query(
+    `SELECT config_month
+       FROM performance_efficiency_period_settings
+      ORDER BY config_month DESC
+      LIMIT 1`
+  );
+  if (configRow?.config_month) {
+    return normalizeDateValue(configRow.config_month) || currentMonthStart();
+  }
+
+  const [[uploadRow]] = await pool.query(
+    `SELECT report_month
+       FROM performance_sales_upload_batches
+      WHERE is_active = 1
+      ORDER BY report_month DESC
+      LIMIT 1`
+  );
+  if (uploadRow?.report_month) {
+    return normalizeDateValue(uploadRow.report_month) || currentMonthStart();
+  }
+
+  return currentMonthStart();
+}
+
+function resolveEfficiencyContext(params = {}, fallbackConfigMonth = null) {
+  if (params && typeof params === 'object' && params.requested_config_month) {
+    const requestedConfigMonth = normalizeConfigMonth(params.requested_config_month)
+      || normalizeConfigMonth(fallbackConfigMonth)
+      || currentMonthStart();
+
+    return {
+      requested_config_month: requestedConfigMonth,
+      report_year: clampInt(params.report_year, parseInt(requestedConfigMonth.slice(0, 4), 10), 2000, 2100),
+      ytd_month_number: clampInt(params.ytd_month_number, parseInt(requestedConfigMonth.slice(5, 7), 10), 1, 12),
+    };
+  }
+
+  const explicitContextMonth = normalizeConfigMonth(params.configMonth || params.config_month);
+  const year = parseInt(params.year, 10);
+  const month = parseInt(params.month || params.ytd_month_number || params.ytdMonthNumber, 10);
+
+  const requestedConfigMonth = explicitContextMonth
+    || (Number.isFinite(year) && Number.isFinite(month) && month >= 1 && month <= 12
+      ? `${year}-${String(month).padStart(2, '0')}-01`
+      : normalizeConfigMonth(fallbackConfigMonth) || currentMonthStart());
+
+  return {
+    requested_config_month: requestedConfigMonth,
+    report_year: clampInt(year, parseInt(requestedConfigMonth.slice(0, 4), 10), 2000, 2100),
+    ytd_month_number: clampInt(month, parseInt(requestedConfigMonth.slice(5, 7), 10), 1, 12),
+  };
+}
+
 async function ensureEfficiencySeed(configMonth) {
   if (seedPromises.has(configMonth)) {
     await seedPromises.get(configMonth);
@@ -575,7 +638,8 @@ async function ensureEfficiencySeedOnce(configMonth) {
   }
 
   const workbookSeed = await parseWorkbookSeed(configMonth);
-  await replaceEfficiencyConfig(configMonth, workbookSeed, null);
+  const normalizedSeed = normalizeConfigPayload(workbookSeed, configMonth);
+  await replaceEfficiencyConfig(configMonth, normalizedSeed, null);
 }
 
 async function parseWorkbookSeed(configMonth) {
@@ -605,6 +669,7 @@ function parseSalesProductivitySheet(sheet, configMonth) {
         group_name: managerValue,
         manager_name: managerValue,
         manager_user_id: null,
+        metrics_source: 'sales_upload',
         total_salary_amount: null,
         total_salary_divisor: 1,
         total_salary_multiplier: 1,
@@ -677,6 +742,7 @@ function parsePresalesSheet(sheet, configMonth) {
         group_name: managerValue,
         manager_name: managerValue,
         manager_user_id: null,
+        metrics_source: 'sales_upload',
         total_salary_amount: null,
         total_salary_divisor: 1,
         total_salary_multiplier: 1,
@@ -723,7 +789,8 @@ function parsePresalesSheet(sheet, configMonth) {
   };
 }
 
-async function readEfficiencyConfig(configMonth) {
+async function readEfficiencyConfig(configMonth, context = null) {
+  const runtimeContext = resolveEfficiencyContext(context, configMonth);
   const [periodRows] = await pool.query(
     `SELECT *
        FROM performance_efficiency_period_settings
@@ -756,9 +823,10 @@ async function readEfficiencyConfig(configMonth) {
   const sheets = Object.fromEntries(SHEET_TYPES.map((sheetType) => [sheetType, {
     sheet_type: sheetType,
     label: SHEET_DEFINITIONS[sheetType].label,
-    config_month: configMonth,
-    report_year: parseInt(configMonth.slice(0, 4), 10),
-    ytd_month_number: parseInt(configMonth.slice(5, 7), 10),
+    config_month: runtimeContext.requested_config_month,
+    template_config_month: configMonth,
+    report_year: runtimeContext.report_year,
+    ytd_month_number: runtimeContext.ytd_month_number,
     groups: [],
   }]));
 
@@ -767,8 +835,8 @@ async function readEfficiencyConfig(configMonth) {
       return;
     }
     sheets[row.sheet_type].id = row.id;
-    sheets[row.sheet_type].report_year = Number(row.report_year || parseInt(configMonth.slice(0, 4), 10));
-    sheets[row.sheet_type].ytd_month_number = Number(row.ytd_month_number || parseInt(configMonth.slice(5, 7), 10));
+    sheets[row.sheet_type].template_report_year = Number(row.report_year || parseInt(configMonth.slice(0, 4), 10));
+    sheets[row.sheet_type].template_ytd_month_number = Number(row.ytd_month_number || parseInt(configMonth.slice(5, 7), 10));
   });
 
   const groupsById = new Map();
@@ -800,8 +868,16 @@ async function readEfficiencyConfig(configMonth) {
 
   await mergeWorkbookSeedDefaults(configMonth, sheets);
 
+  Object.values(sheets).forEach((sheet) => {
+    sheet.config_month = runtimeContext.requested_config_month;
+    sheet.template_config_month = configMonth;
+    sheet.report_year = runtimeContext.report_year;
+    sheet.ytd_month_number = runtimeContext.ytd_month_number;
+  });
+
   return {
-    config_month: configMonth,
+    config_month: runtimeContext.requested_config_month,
+    template_config_month: configMonth,
     sheets: Object.fromEntries(
       Object.entries(sheets).map(([sheetType, sheet]) => [sheetType, normalizeSheetOutput(sheet)])
     ),
