@@ -6,6 +6,7 @@ const rateLimit    = require('express-rate-limit');
 const ensureSchema   = require('./db/ensureSchema');
 const authMiddleware = require('./middleware/authMiddleware');
 const errorHandler   = require('./middleware/errorHandler');
+const { requireAdministrativeModuleAccess } = require('./middleware/moduleAccess');
 
 const uploadRoute    = require('./routes/upload');
 const contractsRoute = require('./routes/contracts');
@@ -70,12 +71,12 @@ app.get('/api/health', (_req, res) => {
 app.use('/api', authMiddleware);
 
 // ─── Routes ───────────────────────────────────────────────────
-app.use('/api/upload',    uploadRoute);
-app.use('/api/contracts', contractsRoute);
-app.use('/api/analytics', analyticsRoute);
-app.use('/api/performance', performanceRoute);
+app.use('/api/upload',    requireAdministrativeModuleAccess, uploadRoute);
+app.use('/api/contracts', requireAdministrativeModuleAccess, contractsRoute);
+app.use('/api/analytics', requireAdministrativeModuleAccess, analyticsRoute);
+app.use('/api/performance', requireAdministrativeModuleAccess, performanceRoute);
 app.use('/api/efficiency', efficiencyRoute);
-app.use('/api/settings',  settingsRoute);
+app.use('/api/settings',  requireAdministrativeModuleAccess, settingsRoute);
 
 app.use('/performance-sales', express.static(publicDir));
 app.use('/performance-sales/public', express.static(publicDir));

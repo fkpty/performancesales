@@ -4,6 +4,7 @@ import { useLocation } from 'react-router-dom';
 import usePerformanceStore from '../../store/performanceStore';
 import UploadModal from '../UploadModal';
 import GlobalFiltersPanel from '../GlobalFiltersPanel';
+import { canAccessRoute, canManageEfficiencyConfig, isEfficiencyOnlyUser } from '../../utils/access';
 
 const FALLBACK_YEARS = Array.from({ length: new Date().getFullYear() - 2024 }, (_, i) => new Date().getFullYear() - i);
 const PERIODS = [
@@ -48,21 +49,23 @@ export default function Header() {
   const availableYears = usePerformanceStore(s => s.availableYears);
   const canUploadReports = usePerformanceStore(s => s.canUploadReports);
   const authUser = usePerformanceStore(s => s.authUser);
+  const accessContext = usePerformanceStore(s => s.accessContext);
   const years = availableYears.length ? availableYears : FALLBACK_YEARS;
   const [showUpload,  setShowUpload]  = useState(false);
   const [showFilters, setShowFilters] = useState(false);
-  const canManageEfficiencyConfig = hasEfficiencyConfigAccess(authUser);
+  const canManageConfig = canManageEfficiencyConfig(authUser, accessContext);
+  const efficiencyOnlyUser = isEfficiencyOnlyUser(accessContext);
   const showEfficiencyMonthSelector = location.pathname === '/efficiency' || location.pathname === '/efficiency-config';
   const navItems = [
     { label: 'Panel', icon: 'dashboard', to: '/' },
     { label: 'Eficiencia', icon: 'speed', to: '/efficiency' },
-    ...(canManageEfficiencyConfig
+    ...(canManageConfig
       ? [{ label: 'Configuracion eficiencia', icon: 'tune', to: '/efficiency-config' }]
       : []),
     { label: 'Detalle', icon: 'table_view', to: '/reports' },
     { label: 'Cargas', icon: 'upload_file', to: '/uploads' },
     { label: 'Ajustes', icon: 'settings', to: '/settings' },
-  ];
+  ].filter(({ to }) => canAccessRoute(to, authUser, accessContext));
 
   return (
     <>
@@ -74,20 +77,22 @@ export default function Header() {
           </div>
 
           <div className="flex items-center gap-md flex-wrap justify-end">
-            <div className="flex items-center gap-xs text-on-surface-variant font-body-sm">
-              <span className="material-symbols-outlined text-[18px]">date_range</span>
-              <select
-                value={period}
-                onChange={e => setPeriod(e.target.value)}
-                className="bg-transparent border-none focus:ring-0 cursor-pointer p-0 pr-xs font-medium text-on-surface"
-              >
-                {PERIODS.map(option => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
-                ))}
-              </select>
-            </div>
+            {!efficiencyOnlyUser && (
+              <div className="flex items-center gap-xs text-on-surface-variant font-body-sm">
+                <span className="material-symbols-outlined text-[18px]">date_range</span>
+                <select
+                  value={period}
+                  onChange={e => setPeriod(e.target.value)}
+                  className="bg-transparent border-none focus:ring-0 cursor-pointer p-0 pr-xs font-medium text-on-surface"
+                >
+                  {PERIODS.map(option => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </div>
+            )}
 
-            {period !== 'personalizado' && (
+            {(efficiencyOnlyUser || period !== 'personalizado') && (
               <>
                 <div className="h-4 w-px bg-outline-variant" />
                 <div className="flex items-center gap-xs text-on-surface-variant font-body-sm">
@@ -105,7 +110,7 @@ export default function Header() {
               </>
             )}
 
-            {(period === 'mensual' || showEfficiencyMonthSelector) && (
+            {(efficiencyOnlyUser || period === 'mensual' || showEfficiencyMonthSelector) && (
               <>
                 <div className="h-4 w-px bg-outline-variant" />
                 <select
@@ -120,7 +125,7 @@ export default function Header() {
               </>
             )}
 
-            {period === 'trimestral' && (
+            {!efficiencyOnlyUser && period === 'trimestral' && (
               <>
                 <div className="h-4 w-px bg-outline-variant" />
                 <select
@@ -135,7 +140,7 @@ export default function Header() {
               </>
             )}
 
-            {period === 'personalizado' && (
+            {!efficiencyOnlyUser && period === 'personalizado' && (
               <>
                 <div className="h-4 w-px bg-outline-variant" />
                 <div className="flex items-center gap-xs text-on-surface-variant font-body-sm">
@@ -156,18 +161,19 @@ export default function Header() {
               </>
             )}
 
-            <div className="h-4 w-px bg-outline-variant" />
+            {!efficiencyOnlyUser && <div className="h-4 w-px bg-outline-variant" />}
 
-            {/* Global Filters */}
-            <button
-              onClick={() => setShowFilters(true)}
-              className="flex items-center gap-xs text-on-surface-variant hover:text-on-surface font-body-sm px-xs py-base rounded hover:bg-surface-container transition-colors"
-            >
-              <span className="material-symbols-outlined text-[18px]">filter_list</span>
-              Filtros globales
-            </button>
+            {!efficiencyOnlyUser && (
+              <button
+                onClick={() => setShowFilters(true)}
+                className="flex items-center gap-xs text-on-surface-variant hover:text-on-surface font-body-sm px-xs py-base rounded hover:bg-surface-container transition-colors"
+              >
+                <span className="material-symbols-outlined text-[18px]">filter_list</span>
+                Filtros globales
+              </button>
+            )}
 
-            {canUploadReports && (
+            {canUploadReports && !efficiencyOnlyUser && (
               <button
                 onClick={() => setShowUpload(true)}
                 className="bg-primary-container text-on-primary font-body-sm px-md py-xs rounded-lg flex items-center gap-xs hover:opacity-90 transition-opacity ml-sm"
@@ -198,7 +204,7 @@ export default function Header() {
             ))}
           </nav>
 
-          {canUploadReports && (
+          {canUploadReports && !efficiencyOnlyUser && (
             <button
               onClick={() => setShowUpload(true)}
               className="shrink-0 bg-primary-container text-on-primary flex items-center justify-center gap-xs py-sm px-md rounded-lg font-body-sm shadow-sm hover:opacity-90 transition-opacity"
@@ -214,9 +220,4 @@ export default function Header() {
       {showFilters && <GlobalFiltersPanel onClose={() => setShowFilters(false)} />}
     </>
   );
-}
-
-function hasEfficiencyConfigAccess(user) {
-  const roles = Array.isArray(user?.roles) ? user.roles : [];
-  return roles.some((role) => ['admin', 'super_admin', 'rrhh'].includes(String(role).toLowerCase()));
 }

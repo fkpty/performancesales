@@ -1,15 +1,39 @@
 const express = require('express');
 const {
+  exportEfficiencyProductivityWorkbook,
+  getEfficiencyAccessSummary,
   getEfficiencyConfig,
   getEfficiencyOverview,
   saveEfficiencyConfig,
 } = require('../services/efficiencyService');
+const { listHubUsers } = require('../services/hubUserDirectoryService');
+const { hasAdministrativeEfficiencyAccess } = require('../services/efficiencyAccessService');
 
 const router = express.Router();
 
 router.get('/overview', async (req, res, next) => {
   try {
-    res.json(await getEfficiencyOverview(req.query));
+    res.json(await getEfficiencyOverview(req.query, req.user));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/access', async (req, res, next) => {
+  try {
+    res.json(await getEfficiencyAccessSummary(req.query, req.user));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/export', async (req, res, next) => {
+  try {
+    const { workbook, filename } = await exportEfficiencyProductivityWorkbook(req.query, req.user);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    await workbook.xlsx.write(res);
+    res.end();
   } catch (error) {
     next(error);
   }
@@ -17,7 +41,7 @@ router.get('/overview', async (req, res, next) => {
 
 router.get('/config', async (req, res, next) => {
   try {
-    if (!hasEfficiencyConfigAccess(req.user)) {
+    if (!hasAdministrativeEfficiencyAccess(req.user)) {
       return res.status(403).json({ error: 'No tienes permisos para administrar la configuracion de eficiencia.' });
     }
 
@@ -27,9 +51,21 @@ router.get('/config', async (req, res, next) => {
   }
 });
 
+router.get('/users', async (req, res, next) => {
+  try {
+    if (!hasAdministrativeEfficiencyAccess(req.user)) {
+      return res.status(403).json({ error: 'No tienes permisos para consultar usuarios de eficiencia.' });
+    }
+
+    res.json({ users: await listHubUsers() });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.put('/config', async (req, res, next) => {
   try {
-    if (!hasEfficiencyConfigAccess(req.user)) {
+    if (!hasAdministrativeEfficiencyAccess(req.user)) {
       return res.status(403).json({ error: 'No tienes permisos para administrar la configuracion de eficiencia.' });
     }
 
@@ -38,10 +74,5 @@ router.put('/config', async (req, res, next) => {
     next(error);
   }
 });
-
-function hasEfficiencyConfigAccess(user) {
-  const roles = Array.isArray(user?.roles) ? user.roles.map((role) => String(role || '').trim().toLowerCase()) : [];
-  return roles.includes('admin') || roles.includes('super_admin') || roles.includes('rrhh');
-}
 
 module.exports = router;

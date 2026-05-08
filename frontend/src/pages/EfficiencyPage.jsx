@@ -1,6 +1,7 @@
 import ReactECharts from 'echarts-for-react';
 import { useEffect, useState } from 'react';
-import { fetchEfficiencyOverview } from '../services/api';
+import AccessDeniedState from '../components/ui/AccessDeniedState';
+import { exportEfficiencyProductivity, fetchEfficiencyOverview } from '../services/api';
 import usePerformanceStore from '../store/performanceStore';
 import { formatCount, formatCurrency, formatPercent } from '../utils/formatters';
 
@@ -53,14 +54,29 @@ const SALES_COLUMNS = [
 export default function EfficiencyPage() {
   const year = usePerformanceStore((state) => state.year);
   const month = usePerformanceStore((state) => state.month);
+  const accessContext = usePerformanceStore((state) => state.accessContext);
   const [overview, setOverview] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [exportError, setExportError] = useState('');
+  const [exporting, setExporting] = useState(false);
+  const scopedStatus = overview?.access?.status || accessContext?.efficiency?.status || 'full_access';
+  const accessDenied = scopedStatus === 'no_access';
 
   useEffect(() => {
     let active = true;
     setLoading(true);
     setError('');
+    setExportError('');
+
+    if (accessDenied) {
+      setOverview(null);
+      setLoading(false);
+      setError('No tienes acceso a datos de eficiencia para este periodo.');
+      return () => {
+        active = false;
+      };
+    }
 
     fetchEfficiencyOverview({ year, month })
       .then((response) => {
@@ -88,18 +104,40 @@ export default function EfficiencyPage() {
     return () => {
       active = false;
     };
-  }, [year, month]);
+  }, [accessDenied, month, year]);
 
   const salesSheet = overview?.sheets?.sales_productivity || null;
+  const summaryTitle = scopedStatus === 'seller_scoped' ? 'Tu eficiencia' : 'Eficiencia';
+  const summaryText = scopedStatus === 'manager_scoped'
+    ? 'Vista limitada a los grupos asignados a tu usuario autenticado.'
+    : scopedStatus === 'seller_scoped'
+      ? 'Vista limitada a tu fila, tus metricas y tu resumen.'
+      : 'Replica operativa del workbook con YTD Revenue y YTD Profit tomados segun la fuente configurada de cada grupo.';
+
+  const handleExportSalesProductivity = async () => {
+    try {
+      setExporting(true);
+      setExportError('');
+      await exportEfficiencyProductivity({ year, month });
+    } catch (requestError) {
+      setExportError(
+        requestError?.response?.data?.error
+        || requestError.message
+        || 'No se pudo exportar Productividad comercial.'
+      );
+    } finally {
+      setExporting(false);
+    }
+  };
 
   return (
     <div className="space-y-lg">
       <section className="bg-surface-container-lowest rounded-2xl border border-outline-variant shadow-sm p-lg space-y-sm">
         <div className="flex flex-wrap items-start justify-between gap-md">
           <div>
-            <h2 className="font-h2 text-h2 text-on-surface">Eficiencia</h2>
+            <h2 className="font-h2 text-h2 text-on-surface">{summaryTitle}</h2>
             <p className="text-body-sm text-on-surface-variant mt-xs max-w-3xl">
-              Replica operativa del workbook con YTD Revenue y YTD Profit tomados segun la fuente configurada de cada grupo.
+              {summaryText}
             </p>
           </div>
           <div className="rounded-xl bg-surface-container-low px-md py-sm text-body-sm text-on-surface-variant border border-outline-variant">
@@ -114,9 +152,17 @@ export default function EfficiencyPage() {
         </section>
       )}
 
-      {error && (
+      {error && accessDenied && <AccessDeniedState message={error} />}
+
+      {error && !accessDenied && (
         <section className="bg-red-50 border border-red-200 rounded-2xl px-lg py-md text-red-700">
           {error}
+        </section>
+      )}
+
+      {!error && exportError && (
+        <section className="bg-red-50 border border-red-200 rounded-2xl px-lg py-md text-red-700">
+          {exportError}
         </section>
       )}
 
@@ -133,6 +179,9 @@ export default function EfficiencyPage() {
             subtitle="Vista basada en la hoja Sales Productivity"
             sheet={salesSheet}
             columns={SALES_COLUMNS}
+            onExport={handleExportSalesProductivity}
+            exportLabel={exporting ? 'Exportando...' : 'Exportar'}
+            exportDisabled={exporting}
           />
         </>
       )}
@@ -170,16 +219,29 @@ function SheetSummaryCard({ sheet }) {
   );
 }
 
-function SheetPanel({ title, subtitle, sheet, columns }) {
+function SheetPanel({ title, subtitle, sheet, columns, onExport = null, exportLabel = 'Exportar', exportDisabled = false }) {
   if (!sheet) {
     return null;
   }
 
   return (
     <section className="bg-surface-container-lowest rounded-2xl border border-outline-variant shadow-sm overflow-hidden">
-      <div className="px-lg py-md border-b border-outline-variant bg-surface-container-low/30">
-        <h3 className="font-h3 text-h3 text-on-surface">{title}</h3>
-        <p className="text-[12px] text-on-surface-variant mt-xs">{subtitle}</p>
+      <div className="px-lg py-md border-b border-outline-variant bg-surface-container-low/30 flex flex-wrap items-start justify-between gap-sm">
+        <div>
+          <h3 className="font-h3 text-h3 text-on-surface">{title}</h3>
+          <p className="text-[12px] text-on-surface-variant mt-xs">{subtitle}</p>
+        </div>
+        {onExport && (
+          <button
+            type="button"
+            onClick={onExport}
+            disabled={exportDisabled}
+            className="border border-outline-variant text-on-surface px-sm py-xs rounded-md font-table-data text-table-data hover:bg-surface-container transition-colors flex items-center gap-xs disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            <span className="material-symbols-outlined text-[18px]">download</span>
+            {exportLabel}
+          </button>
+        )}
       </div>
 
       <div className="overflow-x-auto">

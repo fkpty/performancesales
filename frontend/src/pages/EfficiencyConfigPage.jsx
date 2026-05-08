@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { fetchEfficiencyConfig, saveEfficiencyConfig } from '../services/api';
+import { fetchEfficiencyConfig, fetchEfficiencyUsers, saveEfficiencyConfig } from '../services/api';
+import AccessDeniedState from '../components/ui/AccessDeniedState';
+import HubUserSelect from '../components/ui/HubUserSelect';
 import usePerformanceStore from '../store/performanceStore';
+import { canManageEfficiencyConfig } from '../utils/access';
 
 const SHEET_ORDER = ['sales_productivity'];
 const SHEET_TITLES = {
@@ -11,9 +14,11 @@ export default function EfficiencyConfigPage() {
   const year = usePerformanceStore((state) => state.year);
   const month = usePerformanceStore((state) => state.month);
   const authUser = usePerformanceStore((state) => state.authUser);
-  const canManage = useMemo(() => hasEfficiencyConfigAccess(authUser), [authUser]);
+  const accessContext = usePerformanceStore((state) => state.accessContext);
+  const canManage = useMemo(() => canManageEfficiencyConfig(authUser, accessContext), [accessContext, authUser]);
 
   const [draft, setDraft] = useState(null);
+  const [availableUsers, setAvailableUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -21,6 +26,7 @@ export default function EfficiencyConfigPage() {
 
   useEffect(() => {
     if (!canManage) {
+      setAvailableUsers([]);
       setLoading(false);
       return;
     }
@@ -30,12 +36,16 @@ export default function EfficiencyConfigPage() {
     setError('');
     setSuccessMessage('');
 
-    fetchEfficiencyConfig({ year, month })
-      .then((response) => {
+    Promise.all([
+      fetchEfficiencyConfig({ year, month }),
+      fetchEfficiencyUsers(),
+    ])
+      .then(([configResponse, usersResponse]) => {
         if (!active) {
           return;
         }
-        setDraft(normalizeDraftConfig(response));
+        setDraft(normalizeDraftConfig(configResponse));
+        setAvailableUsers(Array.isArray(usersResponse?.users) ? usersResponse.users : []);
       })
       .catch((requestError) => {
         if (!active) {
@@ -56,15 +66,10 @@ export default function EfficiencyConfigPage() {
 
   if (!canManage) {
     return (
-      <section className="bg-error-container border border-red-200 rounded-2xl shadow-sm px-xl py-lg space-y-sm">
-        <div className="flex items-center gap-sm text-on-error-container font-semibold">
-          <span className="material-symbols-outlined text-error">lock</span>
-          Acceso restringido
-        </div>
-        <p className="text-on-error-container">
-          Solo admin, super admin y rrhh pueden editar la configuracion de eficiencia.
-        </p>
-      </section>
+      <AccessDeniedState
+        title="Acceso restringido"
+        message="Solo admin, super admin y rrhh pueden administrar la configuracion y las asignaciones de acceso de eficiencia."
+      />
     );
   }
 
@@ -76,6 +81,9 @@ export default function EfficiencyConfigPage() {
             <h2 className="font-h2 text-h2 text-on-surface">Configuracion de eficiencia</h2>
             <p className="text-body-sm text-on-surface-variant mt-xs max-w-3xl">
               Ajusta grupos, responsables, salarios, metas y los meses usados en las formulas del workbook.
+            </p>
+            <p className="text-body-sm text-on-surface-variant mt-xs max-w-3xl">
+              Las asignaciones de acceso se guardan por periodo. Si un mes nuevo no trae relaciones explicitas, el backend hereda la ultima asignacion guardada para gerente y vendedor.
             </p>
           </div>
           <button
@@ -117,6 +125,7 @@ export default function EfficiencyConfigPage() {
           key={sheetType}
           sheetType={sheetType}
           sheet={draft.sheets?.[sheetType]}
+          availableUsers={availableUsers}
           onSheetFieldChange={(field, value) => updateDraft((next) => {
             next.sheets[sheetType][field] = value;
           })}
@@ -125,6 +134,15 @@ export default function EfficiencyConfigPage() {
           })}
           onRemoveGroup={(groupIndex) => updateDraft((next) => {
             next.sheets[sheetType].groups.splice(groupIndex, 1);
+          })}
+          onManagerAssignmentChange={(groupIndex, user) => updateDraft((next) => {
+            const group = next.sheets[sheetType].groups[groupIndex];
+            group.manager_user_id = user?.id || '';
+            group.manager_user_email = user?.email || '';
+
+            if (!String(group.manager_name || '').trim() && user?.full_name) {
+              group.manager_name = user.full_name;
+            }
           })}
           onGroupFieldChange={(groupIndex, field, value) => updateDraft((next) => {
             next.sheets[sheetType].groups[groupIndex][field] = value;
@@ -137,6 +155,16 @@ export default function EfficiencyConfigPage() {
           })}
           onMemberFieldChange={(groupIndex, memberIndex, field, value) => updateDraft((next) => {
             next.sheets[sheetType].groups[groupIndex].members[memberIndex][field] = value;
+          })}
+          onMemberAssignmentChange={(groupIndex, memberIndex, user) => updateDraft((next) => {
+            const member = next.sheets[sheetType].groups[groupIndex].members[memberIndex];
+            member.seller_user_id = user?.id || '';
+            member.seller_user_name = user?.full_name || '';
+            member.seller_user_email = user?.email || '';
+
+            if (!String(member.seller_name || '').trim() && user?.full_name) {
+              member.seller_name = user.full_name;
+            }
           })}
         />
       ))}
@@ -164,7 +192,7 @@ export default function EfficiencyConfigPage() {
 
     try {
       const response = await saveEfficiencyConfig({ year, month }, draft);
-      setDraft(response);
+      setDraft(normalizeDraftConfig(response));
       setSuccessMessage('La configuracion de eficiencia se guardo correctamente.');
     } catch (saveError) {
       setError(saveError.message || 'No se pudo guardar la configuracion de eficiencia.');
@@ -177,13 +205,16 @@ export default function EfficiencyConfigPage() {
 function SheetEditor({
   sheetType,
   sheet,
+  availableUsers,
   onSheetFieldChange,
   onAddGroup,
   onRemoveGroup,
+  onManagerAssignmentChange,
   onGroupFieldChange,
   onAddMember,
   onRemoveMember,
   onMemberFieldChange,
+  onMemberAssignmentChange,
 }) {
   if (!sheet) {
     return null;
@@ -231,8 +262,36 @@ function SheetEditor({
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-md">
                 <Field label="Nombre de grupo" value={group.group_name} onChange={(value) => onGroupFieldChange(groupIndex, 'group_name', value)} />
                 <Field label="Gerente / responsable" value={group.manager_name} onChange={(value) => onGroupFieldChange(groupIndex, 'manager_name', value)} />
-                <Field label="Hub user id (opcional)" value={group.manager_user_id ?? ''} onChange={(value) => onGroupFieldChange(groupIndex, 'manager_user_id', value)} type="number" />
                 <Field label="Orden" value={group.sort_order} onChange={(value) => onGroupFieldChange(groupIndex, 'sort_order', value)} type="number" />
+              </div>
+
+              <div className="rounded-2xl border border-outline-variant bg-surface-container-low/10 p-md space-y-md">
+                <div>
+                  <h5 className="font-medium text-on-surface">Asignacion de acceso del gerente</h5>
+                  <p className="text-[12px] text-on-surface-variant mt-xs">
+                    Selecciona el usuario real del Hub. La herramienta guarda automaticamente el id y el correo de referencia.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-md">
+                  <HubUserSelect
+                    label="Usuario gerente"
+                    users={availableUsers}
+                    roleHint="gerente"
+                    assignment={{
+                      id: group.manager_user_id,
+                      name: group.manager_name,
+                      email: group.manager_user_email,
+                    }}
+                    onChange={(user) => onManagerAssignmentChange(groupIndex, user)}
+                  />
+
+                  <div className="rounded-xl border border-outline-variant bg-surface-container-lowest px-sm py-sm space-y-xs">
+                    <p className="text-[12px] uppercase tracking-wide text-on-surface-variant">Datos resueltos</p>
+                    <p className="text-sm text-on-surface">ID: {group.manager_user_id || 'Sin asignar'}</p>
+                    <p className="text-sm text-on-surface">Correo: {group.manager_user_email || 'Sin asignar'}</p>
+                  </div>
+                </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-md">
@@ -290,34 +349,15 @@ function SheetEditor({
                       <tr key={`${sheetType}-${groupIndex}-${memberIndex}`} className="border-t border-outline-variant/70 align-top">
                         {EDITOR_COLUMNS.map((column) => (
                           <td key={column.key} className="px-sm py-sm min-w-[10rem]">
-                            {column.type === 'select' ? (
-                              <select
-                                value={member[column.key] ?? column.options[0].value}
-                                onChange={(event) => onMemberFieldChange(groupIndex, memberIndex, column.key, event.target.value)}
-                                className="w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-sm py-xs text-on-surface"
-                              >
-                                {column.options.map((option) => (
-                                  <option key={option.value} value={option.value}>{option.label}</option>
-                                ))}
-                              </select>
-                            ) : column.type === 'checkbox' ? (
-                              <label className="inline-flex items-center gap-xs text-on-surface">
-                                <input
-                                  type="checkbox"
-                                  checked={Boolean(member[column.key])}
-                                  onChange={(event) => onMemberFieldChange(groupIndex, memberIndex, column.key, event.target.checked)}
-                                />
-                                Otro
-                              </label>
-                            ) : (
-                              <input
-                                type={column.type || 'text'}
-                                step={column.step}
-                                value={member[column.key] ?? ''}
-                                onChange={(event) => onMemberFieldChange(groupIndex, memberIndex, column.key, event.target.value)}
-                                className="w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-sm py-xs text-on-surface"
-                              />
-                            )}
+                            {renderEditorCell({
+                              column,
+                              member,
+                              groupIndex,
+                              memberIndex,
+                              availableUsers,
+                              onMemberFieldChange,
+                              onMemberAssignmentChange,
+                            })}
                           </td>
                         ))}
                         <td className="px-sm py-sm">
@@ -348,6 +388,70 @@ function SheetEditor({
         ))}
       </div>
     </section>
+  );
+}
+
+function renderEditorCell({
+  column,
+  member,
+  groupIndex,
+  memberIndex,
+  availableUsers,
+  onMemberFieldChange,
+  onMemberAssignmentChange,
+}) {
+  if (column.type === 'hub-user') {
+    return (
+      <HubUserSelect
+        label=""
+        users={availableUsers}
+        roleHint="vendedor"
+        assignment={{
+          id: member.seller_user_id,
+          name: member.seller_user_name || member.seller_name,
+          email: member.seller_user_email,
+        }}
+        onChange={(user) => onMemberAssignmentChange(groupIndex, memberIndex, user)}
+        compact
+      />
+    );
+  }
+
+  if (column.type === 'select') {
+    return (
+      <select
+        value={member[column.key] ?? column.options[0].value}
+        onChange={(event) => onMemberFieldChange(groupIndex, memberIndex, column.key, event.target.value)}
+        className="w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-sm py-xs text-on-surface"
+      >
+        {column.options.map((option) => (
+          <option key={option.value} value={option.value}>{option.label}</option>
+        ))}
+      </select>
+    );
+  }
+
+  if (column.type === 'checkbox') {
+    return (
+      <label className="inline-flex items-center gap-xs text-on-surface">
+        <input
+          type="checkbox"
+          checked={Boolean(member[column.key])}
+          onChange={(event) => onMemberFieldChange(groupIndex, memberIndex, column.key, event.target.checked)}
+        />
+        Otro
+      </label>
+    );
+  }
+
+  return (
+    <input
+      type={column.type || 'text'}
+      step={column.step}
+      value={member[column.key] ?? ''}
+      onChange={(event) => onMemberFieldChange(groupIndex, memberIndex, column.key, event.target.value)}
+      className="w-full rounded-lg border border-outline-variant bg-surface-container-lowest px-sm py-xs text-on-surface"
+    />
   );
 }
 
@@ -593,6 +697,7 @@ function createEmptyGroup(index) {
     group_name: `Grupo ${index + 1}`,
     manager_name: '',
     manager_user_id: '',
+    manager_user_email: '',
     metrics_source: 'sales_upload',
     total_salary_amount: '',
     total_salary_divisor: 1,
@@ -608,6 +713,9 @@ function createEmptyMember(index) {
   return {
     employee_id: '',
     seller_name: '',
+    seller_user_id: '',
+    seller_user_name: '',
+    seller_user_email: '',
     market_segment: '',
     months_in_role_label: '',
     months_in_role_value: '',
@@ -683,11 +791,6 @@ function cloneValue(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-function hasEfficiencyConfigAccess(user) {
-  const roles = Array.isArray(user?.roles) ? user.roles.map((role) => String(role || '').trim().toLowerCase()) : [];
-  return roles.includes('admin') || roles.includes('super_admin') || roles.includes('rrhh');
-}
-
 const MONTH_MODES = [
   { value: 'period', label: 'Usar YTD month #' },
   { value: 'months_in_role', label: 'Usar months in sales' },
@@ -702,6 +805,7 @@ const METRICS_SOURCE_OPTIONS = [
 const EDITOR_COLUMNS = [
   { key: 'employee_id', label: 'ID empleado' },
   { key: 'seller_name', label: 'Vendedor' },
+  { key: 'seller_user_assignment', label: 'Usuario acceso', type: 'hub-user' },
   { key: 'market_segment', label: 'Segmento' },
   { key: 'months_in_role_label', label: 'Meses label' },
   { key: 'months_in_role_value', label: 'Meses valor', type: 'number' },

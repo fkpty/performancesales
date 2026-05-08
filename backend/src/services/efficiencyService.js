@@ -2,6 +2,13 @@ const fs = require('fs');
 const path = require('path');
 const ExcelJS = require('exceljs');
 const pool = require('../db/connection');
+const {
+  buildEfficiencyAccessPayload,
+  createEfficiencyForbiddenError,
+  filterEfficiencyConfigByScope,
+  resolveEfficiencyScope,
+  resolveNavigationAccess,
+} = require('./efficiencyAccessService');
 
 const WORKBOOK_PATH = path.resolve(__dirname, '..', '..', '..', 'Excel', 'app', '2026 03 Sales Productivity .xlsx');
 const WORKBOOK_MONEY_MULTIPLIER = 1000;
@@ -13,58 +20,122 @@ const SHEET_DEFINITIONS = {
   },
 };
 const SHEET_TYPES = Object.keys(SHEET_DEFINITIONS);
-const EFFICIENCY_MEMBER_INSERT_PLACEHOLDERS = new Array(24).fill('?').join(',');
-const EFFICIENCY_MANUAL_METRIC_INSERT_PLACEHOLDERS = new Array(9).fill('?').join(',');
+const EFFICIENCY_MEMBER_INSERT_PLACEHOLDERS = new Array(27).fill('?').join(',');
+const EFFICIENCY_EXPORT_COLUMNS = [
+  { key: 'group_name', header: 'Grupo', width: 26 },
+  { key: 'manager_name', header: 'Gerente', width: 24 },
+  { key: 'seller_name', header: 'Vendedor', width: 28 },
+  { key: 'market_segment', header: 'Segmento', width: 18 },
+  { key: 'months_in_role_label', header: 'Meses en ventas', width: 18 },
+  { key: 'yearly_total_target', header: 'Meta anual total', width: 18, numFmt: '$#,##0.00' },
+  { key: 'yearly_total_target_gp', header: 'Meta anual GP', width: 18, numFmt: '$#,##0.00' },
+  { key: 'ytd_target_revenue', header: 'YTD Target Rev', width: 18, numFmt: '$#,##0.00' },
+  { key: 'ytd_target_profit', header: 'YTD Target Profit', width: 18, numFmt: '$#,##0.00' },
+  { key: 'ytd_revenue', header: 'YTD Rev', width: 18, numFmt: '$#,##0.00' },
+  { key: 'ytd_profit', header: 'YTD Profit', width: 18, numFmt: '$#,##0.00' },
+  { key: 'ytd_plan_percent_revenue', header: 'Plan % Rev', width: 14, numFmt: '0.00%' },
+  { key: 'ytd_plan_percent_profit', header: 'Plan % Profit', width: 14, numFmt: '0.00%' },
+  { key: 'salary_fully_loaded', header: 'Salary Fully Loaded', width: 20, numFmt: '$#,##0.00' },
+  { key: 'efficiency_rate', header: 'Eficiencia', width: 14, numFmt: '0.00' },
+];
 const seedPromises = new Map();
 
-async function getEfficiencyOverview(params = {}) {
+async function getEfficiencyOverview(params = {}, user = null) {
   const config = await getEfficiencyConfig(params);
+  const access = resolveEfficiencyScope(user, config);
+  if (access.status === 'no_access') {
+    throw createEfficiencyForbiddenError('No tienes acceso a datos de eficiencia para este periodo.');
+  }
+
+  const scopedConfig = filterEfficiencyConfigByScope(config, access);
   const sheets = {};
 
   for (const sheetType of SHEET_TYPES) {
-    sheets[sheetType] = await buildSheetOverview(config.sheets[sheetType]);
+    sheets[sheetType] = await buildSheetOverview(scopedConfig.sheets[sheetType]);
   }
 
   return {
-    config_month: config.config_month,
+    config_month: scopedConfig.config_month,
+    access: buildEfficiencyAccessPayload(access),
     sheets,
   };
 }
 
 async function getEfficiencyConfig(params = {}) {
-  const templateConfigMonth = await resolveTemplateConfigMonth(params);
-  const context = resolveEfficiencyContext(params, templateConfigMonth);
-  await ensureEfficiencySeed(templateConfigMonth);
-  return readEfficiencyConfig(templateConfigMonth, context);
+  const configMonth = await resolveConfigMonth(params);
+  await ensureEfficiencySeed(configMonth);
+  return readEfficiencyConfig(configMonth);
 }
 
 async function saveEfficiencyConfig(params = {}, payload = {}, user = null) {
-  const templateConfigMonth = await resolveTemplateConfigMonth({
-    templateConfigMonth: payload.template_config_month || payload.templateConfigMonth || params.templateConfigMonth || params.template_config_month,
-  });
-  const context = resolveEfficiencyContext({
+  const configMonth = await resolveConfigMonth({
     configMonth: payload.config_month || payload.configMonth || params.configMonth || params.config_month,
     year: params.year,
     month: params.month,
-  }, templateConfigMonth);
-  const normalized = normalizeConfigPayload(payload, templateConfigMonth);
-  await replaceEfficiencyConfig(templateConfigMonth, normalized, user?.id || null);
-  return readEfficiencyConfig(templateConfigMonth, context);
+  });
+  const normalized = normalizeConfigPayload(payload, configMonth);
+  await replaceEfficiencyConfig(configMonth, normalized, user?.id || null);
+  return readEfficiencyConfig(configMonth);
+}
+
+async function getEfficiencyAccessSummary(params = {}, user = null) {
+  const config = await getEfficiencyConfig(params);
+  const navigation = await resolveNavigationAccess(user);
+  const access = resolveEfficiencyScope(user, config);
+
+  return {
+    config_month: config.config_month,
+    navigation,
+    efficiency: buildEfficiencyAccessPayload(access),
+  };
+}
+
+async function exportEfficiencyProductivityWorkbook(params = {}, user = null) {
+  const overview = await getEfficiencyOverview(params, user);
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet('Sales Productivity');
+  const sheet = overview.sheets.sales_productivity;
+
+  worksheet.addRow(['Performance Sales - Eficiencia']);
+  worksheet.addRow(['Periodo', overview.config_month.slice(0, 7)]);
+  worksheet.addRow(['Alcance', overview.access?.status || 'no_access']);
+  worksheet.addRow([]);
+
+  worksheet.columns = EFFICIENCY_EXPORT_COLUMNS;
+
+  EFFICIENCY_EXPORT_COLUMNS.forEach((column, index) => {
+    const worksheetColumn = worksheet.getColumn(index + 1);
+    worksheetColumn.width = column.width;
+    if (column.numFmt) {
+      worksheetColumn.numFmt = column.numFmt;
+    }
+  });
+
+  (sheet?.groups || []).forEach((group, groupIndex) => {
+    (group.members || []).forEach((member) => {
+      worksheet.addRow(buildExportRow(group, member));
+    });
+
+    worksheet.addRow(buildExportTotalsRow(group));
+
+    if (groupIndex < (sheet?.groups || []).length - 1) {
+      worksheet.addRow({});
+    }
+  });
+
+  worksheet.addRow({});
+  worksheet.addRow(buildExportGrandTotalsRow(sheet));
+  worksheet.views = [{ state: 'frozen', ySplit: 5 }];
+
+  return {
+    workbook,
+    filename: `performance-sales-efficiency-${overview.config_month.slice(0, 7)}.xlsx`,
+  };
 }
 
 async function buildSheetOverview(sheetConfig) {
-  const metricBuckets = await fetchYtdMetricBuckets(sheetConfig.report_year, sheetConfig.ytd_month_number);
-  const { metricsByMember, unmatchedMetrics } = assignMetricBucketsToMembers(sheetConfig, metricBuckets);
-  applyManualMetricsToMembers(sheetConfig, metricsByMember);
-  const groups = sheetConfig.groups.map((group) => buildOverviewGroup(sheetConfig, group, metricsByMember));
-
-  if (hasMetricValues(unmatchedMetrics)) {
-    const unmatchedGroup = createUnmatchedAdjustmentGroup(sheetConfig, groups.length);
-    const unmatchedMember = unmatchedGroup.members[0];
-    metricsByMember.set(unmatchedMember, unmatchedMetrics);
-    groups.push(buildOverviewGroup(sheetConfig, unmatchedGroup, metricsByMember));
-  }
-
+  const metricAssignments = await fetchYtdMetricsBySeller(sheetConfig);
+  const groups = sheetConfig.groups.map((group) => buildOverviewGroup(sheetConfig, group, metricAssignments));
   const grandTotals = buildGrandTotals(sheetConfig.sheet_type, groups);
 
   return {
@@ -74,8 +145,8 @@ async function buildSheetOverview(sheetConfig) {
   };
 }
 
-function buildOverviewGroup(sheetConfig, groupConfig, metricsByMember) {
-  const members = groupConfig.members.map((member) => buildOverviewMember(sheetConfig, member, metricsByMember));
+function buildOverviewGroup(sheetConfig, groupConfig, metricAssignments) {
+  const members = groupConfig.members.map((member) => buildOverviewMember(sheetConfig, groupConfig, member, metricAssignments));
 
   const totals = {
     yearly_printing_target: sumRows(members, 'yearly_printing_target'),
@@ -101,8 +172,8 @@ function buildOverviewGroup(sheetConfig, groupConfig, metricsByMember) {
   };
 }
 
-function buildOverviewMember(sheetConfig, memberConfig, metricsByMember) {
-  const sellerMetrics = resolveSellerMetrics(memberConfig, metricsByMember);
+function buildOverviewMember(sheetConfig, groupConfig, memberConfig, metricAssignments) {
+  const sellerMetrics = resolveSellerMetrics(sheetConfig, groupConfig, memberConfig, metricAssignments);
   const yearlyPrintingTarget = scaleWorkbookMoney(memberConfig.yearly_printing_target);
   const yearlyItOtherTarget = scaleWorkbookMoney(memberConfig.yearly_it_other_target);
   const yearlyRentalTarget = scaleWorkbookMoney(memberConfig.yearly_rental_target);
@@ -182,14 +253,16 @@ function buildGrandTotals(sheetType, groups) {
   };
 }
 
-async function fetchYtdMetricBuckets(reportYear, ytdMonthNumber) {
+async function fetchYtdMetricsBySeller(sheetConfig) {
+  const reportYear = Number(sheetConfig?.report_year);
+  const ytdMonthNumber = Number(sheetConfig?.ytd_month_number);
   if (!Number.isFinite(reportYear) || reportYear <= 0 || !Number.isFinite(ytdMonthNumber) || ytdMonthNumber <= 0) {
-    return [];
+    return createEmptyMetricAssignments();
   }
 
   const [rows] = await pool.query(
     `SELECT
-      COALESCE(TRIM(r.sales_person_name), '') AS sales_person_name,
+      r.sales_person_name,
       COALESCE(SUM(r.revenue), 0) AS total_revenue,
       COALESCE(SUM(r.gross_profit), 0) AS total_gross_profit
      FROM performance_sales_rows r
@@ -197,317 +270,148 @@ async function fetchYtdMetricBuckets(reportYear, ytdMonthNumber) {
      WHERE b.is_active = 1
        AND YEAR(b.report_month) = ?
        AND MONTH(b.report_month) <= ?
-     GROUP BY COALESCE(TRIM(r.sales_person_name), '')`,
+     GROUP BY r.sales_person_name`,
     [reportYear, ytdMonthNumber]
   );
 
-  return rows.map((row) => ({
-    seller_name: String(row.sales_person_name || '').trim(),
-    lookup_key: normalizeLookupKey(row.sales_person_name),
-    total_revenue: toNumber(row.total_revenue),
-    total_gross_profit: toNumber(row.total_gross_profit),
-  }));
+  return buildSheetMetricAssignments(sheetConfig, rows);
 }
 
-function assignMetricBucketsToMembers(sheetConfig, metricBuckets) {
-  const metricsByMember = new Map();
-  const directMemberEntries = [];
-  const manualMemberEntries = [];
-  const otherMemberEntries = [];
-  const unmatchedMetrics = createEmptyMetrics();
+function createEmptyMetricAssignments() {
+  return {
+    memberMetrics: new Map(),
+    otherMetricsByGroup: new Map(),
+  };
+}
 
-  (sheetConfig.groups || []).forEach((group) => {
-    const groupUsesManualMetrics = isManualMetricsGroup(group);
-    const firstOtherMember = (group.members || []).find((member) => isOtherMember(member));
+function buildSheetMetricAssignments(sheetConfig, rows) {
+  const assignments = createEmptyMetricAssignments();
+  const memberIndex = new Map();
+  const looseMemberIndex = new Map();
+  const managerIndex = new Map();
+  const looseManagerIndex = new Map();
+  const managerEntries = [];
+  let fallbackOtherGroupKey = '';
 
-    (group.members || []).forEach((member) => {
-      metricsByMember.set(member, createEmptyMetrics());
+  (sheetConfig?.groups || []).forEach((group) => {
+    const groupKey = buildGroupAccessLookupKey(sheetConfig.sheet_type, group);
+    const managerName = group?.manager_name || group?.group_name;
+    const managerKey = normalizeLookupKey(managerName);
 
+    addUniqueLookup(managerIndex, managerKey, groupKey);
+    addUniqueLookup(looseManagerIndex, normalizeLooseLookupKey(managerName), groupKey);
+
+    if (managerKey) {
+      managerEntries.push({
+        groupKey,
+        tokens: managerKey.split(' ').filter(Boolean),
+      });
+    }
+
+    if (!fallbackOtherGroupKey && (group?.members || []).some((member) => isOtherMember(member))) {
+      fallbackOtherGroupKey = groupKey;
+    }
+
+    (group?.members || []).forEach((member) => {
       if (isOtherMember(member)) {
         return;
       }
 
-      const sellerKey = normalizeLookupKey(member?.seller_name);
-      if (!sellerKey) {
-        return;
-      }
-
-      if (groupUsesManualMetrics) {
-        manualMemberEntries.push({
-          member,
-          sellerKey,
-        });
-        return;
-      }
-
-      directMemberEntries.push({
-        member,
-        sellerKey,
-      });
-    });
-
-    if (firstOtherMember && !groupUsesManualMetrics) {
-      otherMemberEntries.push({
-        otherMember: firstOtherMember,
-        managerKey: normalizeLookupKey(group.manager_name || group.group_name),
-        managerTokens: splitLookupKeyTokens(group.manager_name || group.group_name),
-        groupKey: normalizeLookupKey(group.group_name || group.manager_name),
-        groupTokens: splitLookupKeyTokens(group.group_name || group.manager_name),
-      });
-    }
-  });
-
-  const directMemberByKey = new Map();
-  directMemberEntries.forEach((entry) => {
-    if (!directMemberByKey.has(entry.sellerKey)) {
-      directMemberByKey.set(entry.sellerKey, entry.member);
-    }
-  });
-
-  metricBuckets.forEach((bucket) => {
-    if (shouldSuppressUploadedBucket(bucket, manualMemberEntries)) {
-      return;
-    }
-
-    const targetMember = resolveMetricBucketMember(bucket, directMemberEntries, directMemberByKey, otherMemberEntries);
-    if (targetMember) {
-      accumulateMetrics(metricsByMember, targetMember, bucket);
-      return;
-    }
-
-    accumulateStandaloneMetrics(unmatchedMetrics, bucket);
-  });
-
-  return {
-    metricsByMember,
-    unmatchedMetrics,
-  };
-}
-
-function applyManualMetricsToMembers(sheetConfig, metricsByMember) {
-  (sheetConfig.groups || []).forEach((group) => {
-    if (!isManualMetricsGroup(group)) {
-      return;
-    }
-
-    (group.members || []).forEach((member) => {
-      metricsByMember.set(member, buildManualMetricsForMember(sheetConfig, member));
+      const memberKey = buildMemberAccessLookupKey(sheetConfig.sheet_type, group, member);
+      addUniqueLookup(memberIndex, normalizeLookupKey(member?.seller_name), memberKey);
+      addUniqueLookup(looseMemberIndex, normalizeLooseLookupKey(member?.seller_name), memberKey);
     });
   });
-}
 
-function buildManualMetricsForMember(sheetConfig, member) {
-  const metrics = createEmptyMetrics();
+  rows.forEach((row) => {
+    const metrics = {
+      total_revenue: toNumber(row.total_revenue),
+      total_gross_profit: toNumber(row.total_gross_profit),
+    };
 
-  (member?.manual_metrics || []).forEach((entry) => {
-    const normalizedMonth = normalizeManualMetricMonth(entry?.metric_month, sheetConfig.report_year);
-    if (!normalizedMonth) {
+    if (!metrics.total_revenue && !metrics.total_gross_profit) {
       return;
     }
 
-    const entryYear = parseInt(normalizedMonth.slice(0, 4), 10);
-    const entryMonth = parseInt(normalizedMonth.slice(5, 7), 10);
-    if (entryYear !== Number(sheetConfig.report_year) || entryMonth > Number(sheetConfig.ytd_month_number || 0)) {
+    const sellerName = String(row.sales_person_name || '').trim();
+    const exactSellerKey = normalizeLookupKey(sellerName);
+    const looseSellerKey = normalizeLooseLookupKey(sellerName);
+    const memberKey = resolveUniqueLookup(memberIndex, exactSellerKey)
+      || resolveUniqueLookup(looseMemberIndex, looseSellerKey);
+
+    if (memberKey) {
+      accumulateMetrics(assignments.memberMetrics, memberKey, metrics);
       return;
     }
 
-    metrics.total_revenue += toNumber(entry?.revenue);
-    metrics.total_gross_profit += toNumber(entry?.gross_profit);
-  });
+    const otherGroupKey = resolveOtherGroupKeyForSeller(
+      exactSellerKey,
+      looseSellerKey,
+      managerIndex,
+      looseManagerIndex,
+      managerEntries
+    ) || fallbackOtherGroupKey;
 
-  return metrics;
-}
-
-function shouldSuppressUploadedBucket(bucket, manualMemberEntries) {
-  if (!bucket?.lookup_key || !manualMemberEntries.length) {
-    return false;
-  }
-
-  if (manualMemberEntries.some((entry) => entry.sellerKey === bucket.lookup_key)) {
-    return true;
-  }
-
-  return Boolean(findClosestMemberEntry(bucket.lookup_key, manualMemberEntries));
-}
-
-function resolveMetricBucketMember(bucket, directMemberEntries, directMemberByKey, otherMemberEntries) {
-  if (bucket.lookup_key) {
-    const exactMember = directMemberByKey.get(bucket.lookup_key);
-    if (exactMember) {
-      return exactMember;
-    }
-
-    const fuzzyMemberEntry = findClosestMemberEntry(bucket.lookup_key, directMemberEntries);
-    if (fuzzyMemberEntry) {
-      return fuzzyMemberEntry.member;
-    }
-
-    const otherMemberEntry = findMatchingOtherMemberEntry(bucket.lookup_key, otherMemberEntries);
-    if (otherMemberEntry) {
-      return otherMemberEntry.otherMember;
-    }
-  }
-
-  return null;
-}
-
-function findClosestMemberEntry(lookupKey, directMemberEntries) {
-  if (!lookupKey) {
-    return null;
-  }
-
-  let bestEntry = null;
-  let bestDistance = Number.POSITIVE_INFINITY;
-  let secondBestDistance = Number.POSITIVE_INFINITY;
-
-  directMemberEntries.forEach((entry) => {
-    const distance = computeEditDistance(lookupKey, entry.sellerKey);
-    if (distance < bestDistance) {
-      secondBestDistance = bestDistance;
-      bestDistance = distance;
-      bestEntry = entry;
-      return;
-    }
-
-    if (distance < secondBestDistance) {
-      secondBestDistance = distance;
+    if (otherGroupKey) {
+      accumulateMetrics(assignments.otherMetricsByGroup, otherGroupKey, metrics);
     }
   });
 
-  if (bestEntry && bestDistance <= 1 && bestDistance < secondBestDistance) {
-    return bestEntry;
-  }
-
-  return null;
+  return assignments;
 }
 
-function findMatchingOtherMemberEntry(lookupKey, otherMemberEntries) {
-  if (!lookupKey) {
+function addUniqueLookup(index, key, value) {
+  if (!key) {
+    return;
+  }
+
+  if (!index.has(key)) {
+    index.set(key, value);
+    return;
+  }
+
+  if (index.get(key) !== value) {
+    index.set(key, null);
+  }
+}
+
+function resolveUniqueLookup(index, key) {
+  if (!key || !index.has(key)) {
     return null;
   }
 
-  const exactMatches = otherMemberEntries.filter((entry) => (
-    entry.managerKey === lookupKey || entry.groupKey === lookupKey
-  ));
-  if (exactMatches.length === 1) {
-    return exactMatches[0];
+  return index.get(key) || null;
+}
+
+function accumulateMetrics(index, key, metrics) {
+  if (!key) {
+    return;
   }
 
-  const tokens = splitLookupKeyTokens(lookupKey);
-  if (!tokens.length) {
+  const current = index.get(key) || { ...EMPTY_METRICS };
+  current.total_revenue += toNumber(metrics.total_revenue);
+  current.total_gross_profit += toNumber(metrics.total_gross_profit);
+  index.set(key, current);
+}
+
+function resolveOtherGroupKeyForSeller(sellerKey, looseSellerKey, managerIndex, looseManagerIndex, managerEntries) {
+  const exactManagerGroup = resolveUniqueLookup(managerIndex, sellerKey);
+  if (exactManagerGroup) {
+    return exactManagerGroup;
+  }
+
+  const looseManagerGroup = resolveUniqueLookup(looseManagerIndex, looseSellerKey);
+  if (looseManagerGroup) {
+    return looseManagerGroup;
+  }
+
+  const sellerTokens = sellerKey ? sellerKey.split(' ').filter(Boolean) : [];
+  if (!sellerTokens.length) {
     return null;
   }
 
-  const tokenMatches = otherMemberEntries.filter((entry) => (
-    tokens.every((token) => entry.managerTokens.includes(token) || entry.groupTokens.includes(token))
-  ));
-
-  return tokenMatches.length === 1 ? tokenMatches[0] : null;
-}
-
-function accumulateMetrics(metricsByMember, memberConfig, bucket) {
-  const current = metricsByMember.get(memberConfig) || createEmptyMetrics();
-  current.total_revenue += toNumber(bucket.total_revenue);
-  current.total_gross_profit += toNumber(bucket.total_gross_profit);
-  metricsByMember.set(memberConfig, current);
-}
-
-function accumulateStandaloneMetrics(target, bucket) {
-  target.total_revenue += toNumber(bucket.total_revenue);
-  target.total_gross_profit += toNumber(bucket.total_gross_profit);
-}
-
-function createUnmatchedAdjustmentGroup(sheetConfig, sortOrder) {
-  return {
-    id: null,
-    group_name: 'Ajustes no asignados',
-    manager_name: 'Ajustes no asignados',
-    manager_user_id: null,
-    total_salary_amount: null,
-    total_salary_divisor: 1,
-    total_salary_multiplier: 1,
-    total_salary_months_mode: 'period',
-    total_salary_months_custom: null,
-    sort_order: sortOrder,
-    members: [
-      {
-        seller_name: 'No asignado / no mapeado',
-        employee_id: '',
-        market_segment: '',
-        months_in_role_label: '',
-        months_in_role_value: null,
-        yearly_printing_target: 0,
-        yearly_it_other_target: 0,
-        yearly_rental_target: 0,
-        yearly_total_target: 0,
-        yearly_gp_target_rate: SHEET_DEFINITIONS[sheetConfig.sheet_type]?.defaultGpRate || 0,
-        plan_months_mode: 'period',
-        plan_months_custom: null,
-        salary_amount: 0,
-        salary_divisor: 1,
-        salary_multiplier: 1,
-        salary_months_mode: 'period',
-        salary_months_custom: null,
-        is_other_row: true,
-        sort_order: 0,
-      },
-    ],
-  };
-}
-
-function createEmptyMetrics() {
-  return {
-    total_revenue: 0,
-    total_gross_profit: 0,
-  };
-}
-
-function hasMetricValues(metrics) {
-  return Boolean(metrics) && (
-    Math.abs(toNumber(metrics.total_revenue)) > 0.0001
-    || Math.abs(toNumber(metrics.total_gross_profit)) > 0.0001
-  );
-}
-
-function splitLookupKeyTokens(value) {
-  return normalizeLookupKey(value).split(' ').filter(Boolean);
-}
-
-function computeEditDistance(leftValue, rightValue) {
-  const left = String(leftValue || '');
-  const right = String(rightValue || '');
-
-  if (left === right) {
-    return 0;
-  }
-  if (!left.length) {
-    return right.length;
-  }
-  if (!right.length) {
-    return left.length;
-  }
-
-  const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
-  const current = new Array(right.length + 1).fill(0);
-
-  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
-    current[0] = leftIndex;
-
-    for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
-      const substitutionCost = left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1;
-      current[rightIndex] = Math.min(
-        current[rightIndex - 1] + 1,
-        previous[rightIndex] + 1,
-        previous[rightIndex - 1] + substitutionCost
-      );
-    }
-
-    for (let rightIndex = 0; rightIndex <= right.length; rightIndex += 1) {
-      previous[rightIndex] = current[rightIndex];
-    }
-  }
-
-  return previous[right.length];
+  const subsetMatches = managerEntries.filter((entry) => sellerTokens.every((token) => entry.tokens.includes(token)));
+  return subsetMatches.length === 1 ? subsetMatches[0].groupKey : null;
 }
 
 async function resolveConfigMonth(params = {}) {
@@ -546,65 +450,6 @@ async function resolveConfigMonth(params = {}) {
   return currentMonthStart();
 }
 
-async function resolveTemplateConfigMonth(params = {}) {
-  const explicit = normalizeConfigMonth(params.templateConfigMonth || params.template_config_month);
-  if (explicit) {
-    return explicit;
-  }
-
-  const [[configRow]] = await pool.query(
-    `SELECT config_month
-       FROM performance_efficiency_period_settings
-      ORDER BY config_month DESC
-      LIMIT 1`
-  );
-  if (configRow?.config_month) {
-    return normalizeDateValue(configRow.config_month) || currentMonthStart();
-  }
-
-  const [[uploadRow]] = await pool.query(
-    `SELECT report_month
-       FROM performance_sales_upload_batches
-      WHERE is_active = 1
-      ORDER BY report_month DESC
-      LIMIT 1`
-  );
-  if (uploadRow?.report_month) {
-    return normalizeDateValue(uploadRow.report_month) || currentMonthStart();
-  }
-
-  return currentMonthStart();
-}
-
-function resolveEfficiencyContext(params = {}, fallbackConfigMonth = null) {
-  if (params && typeof params === 'object' && params.requested_config_month) {
-    const requestedConfigMonth = normalizeConfigMonth(params.requested_config_month)
-      || normalizeConfigMonth(fallbackConfigMonth)
-      || currentMonthStart();
-
-    return {
-      requested_config_month: requestedConfigMonth,
-      report_year: clampInt(params.report_year, parseInt(requestedConfigMonth.slice(0, 4), 10), 2000, 2100),
-      ytd_month_number: clampInt(params.ytd_month_number, parseInt(requestedConfigMonth.slice(5, 7), 10), 1, 12),
-    };
-  }
-
-  const explicitContextMonth = normalizeConfigMonth(params.configMonth || params.config_month);
-  const year = parseInt(params.year, 10);
-  const month = parseInt(params.month || params.ytd_month_number || params.ytdMonthNumber, 10);
-
-  const requestedConfigMonth = explicitContextMonth
-    || (Number.isFinite(year) && Number.isFinite(month) && month >= 1 && month <= 12
-      ? `${year}-${String(month).padStart(2, '0')}-01`
-      : normalizeConfigMonth(fallbackConfigMonth) || currentMonthStart());
-
-  return {
-    requested_config_month: requestedConfigMonth,
-    report_year: clampInt(year, parseInt(requestedConfigMonth.slice(0, 4), 10), 2000, 2100),
-    ytd_month_number: clampInt(month, parseInt(requestedConfigMonth.slice(5, 7), 10), 1, 12),
-  };
-}
-
 async function ensureEfficiencySeed(configMonth) {
   if (seedPromises.has(configMonth)) {
     await seedPromises.get(configMonth);
@@ -638,8 +483,7 @@ async function ensureEfficiencySeedOnce(configMonth) {
   }
 
   const workbookSeed = await parseWorkbookSeed(configMonth);
-  const normalizedSeed = normalizeConfigPayload(workbookSeed, configMonth);
-  await replaceEfficiencyConfig(configMonth, normalizedSeed, null);
+  await replaceEfficiencyConfig(configMonth, workbookSeed, null);
 }
 
 async function parseWorkbookSeed(configMonth) {
@@ -669,7 +513,6 @@ function parseSalesProductivitySheet(sheet, configMonth) {
         group_name: managerValue,
         manager_name: managerValue,
         manager_user_id: null,
-        metrics_source: 'sales_upload',
         total_salary_amount: null,
         total_salary_divisor: 1,
         total_salary_multiplier: 1,
@@ -742,7 +585,6 @@ function parsePresalesSheet(sheet, configMonth) {
         group_name: managerValue,
         manager_name: managerValue,
         manager_user_id: null,
-        metrics_source: 'sales_upload',
         total_salary_amount: null,
         total_salary_divisor: 1,
         total_salary_multiplier: 1,
@@ -789,8 +631,7 @@ function parsePresalesSheet(sheet, configMonth) {
   };
 }
 
-async function readEfficiencyConfig(configMonth, context = null) {
-  const runtimeContext = resolveEfficiencyContext(context, configMonth);
+async function readEfficiencyConfig(configMonth) {
   const [periodRows] = await pool.query(
     `SELECT *
        FROM performance_efficiency_period_settings
@@ -812,21 +653,13 @@ async function readEfficiencyConfig(configMonth, context = null) {
       ORDER BY sheet_type ASC, group_id ASC, sort_order ASC, id ASC`,
     [configMonth]
   );
-  const [manualMetricRows] = await pool.query(
-    `SELECT *
-       FROM performance_efficiency_member_manual_metrics
-      WHERE config_month = ?
-      ORDER BY sheet_type ASC, group_name ASC, seller_name ASC, metric_month ASC, id ASC`,
-    [configMonth]
-  );
 
   const sheets = Object.fromEntries(SHEET_TYPES.map((sheetType) => [sheetType, {
     sheet_type: sheetType,
     label: SHEET_DEFINITIONS[sheetType].label,
-    config_month: runtimeContext.requested_config_month,
-    template_config_month: configMonth,
-    report_year: runtimeContext.report_year,
-    ytd_month_number: runtimeContext.ytd_month_number,
+    config_month: configMonth,
+    report_year: parseInt(configMonth.slice(0, 4), 10),
+    ytd_month_number: parseInt(configMonth.slice(5, 7), 10),
     groups: [],
   }]));
 
@@ -835,12 +668,11 @@ async function readEfficiencyConfig(configMonth, context = null) {
       return;
     }
     sheets[row.sheet_type].id = row.id;
-    sheets[row.sheet_type].template_report_year = Number(row.report_year || parseInt(configMonth.slice(0, 4), 10));
-    sheets[row.sheet_type].template_ytd_month_number = Number(row.ytd_month_number || parseInt(configMonth.slice(5, 7), 10));
+    sheets[row.sheet_type].report_year = Number(row.report_year || parseInt(configMonth.slice(0, 4), 10));
+    sheets[row.sheet_type].ytd_month_number = Number(row.ytd_month_number || parseInt(configMonth.slice(5, 7), 10));
   });
 
   const groupsById = new Map();
-  const membersByLookup = new Map();
   groupRows.forEach((row) => {
     const group = mapGroupRow(row);
     groupsById.set(group.id, group);
@@ -852,32 +684,14 @@ async function readEfficiencyConfig(configMonth, context = null) {
     if (!group) {
       return;
     }
-    const member = mapMemberRow(row);
-    group.members.push(member);
-    membersByLookup.set(buildManualMetricLookupKey(group.group_name, member.seller_name), member);
-  });
-
-  manualMetricRows.forEach((row) => {
-    const member = membersByLookup.get(buildManualMetricLookupKey(row.group_name, row.seller_name));
-    if (!member) {
-      return;
-    }
-
-    member.manual_metrics.push(mapManualMetricRow(row));
+    group.members.push(mapMemberRow(row));
   });
 
   await mergeWorkbookSeedDefaults(configMonth, sheets);
-
-  Object.values(sheets).forEach((sheet) => {
-    sheet.config_month = runtimeContext.requested_config_month;
-    sheet.template_config_month = configMonth;
-    sheet.report_year = runtimeContext.report_year;
-    sheet.ytd_month_number = runtimeContext.ytd_month_number;
-  });
+  await applyInheritedAccessAssignments(configMonth, sheets);
 
   return {
-    config_month: runtimeContext.requested_config_month,
-    template_config_month: configMonth,
+    config_month: configMonth,
     sheets: Object.fromEntries(
       Object.entries(sheets).map(([sheetType, sheet]) => [sheetType, normalizeSheetOutput(sheet)])
     ),
@@ -890,10 +704,6 @@ async function replaceEfficiencyConfig(configMonth, normalizedPayload, userId) {
   try {
     await connection.beginTransaction();
 
-    await connection.execute(
-      'DELETE FROM performance_efficiency_member_manual_metrics WHERE config_month = ?',
-      [configMonth]
-    );
     await connection.execute(
       'DELETE FROM performance_efficiency_members WHERE config_month = ?',
       [configMonth]
@@ -940,7 +750,7 @@ async function replaceEfficiencyConfig(configMonth, normalizedPayload, userId) {
             group_name,
             manager_name,
             manager_user_id,
-            metrics_source,
+            manager_user_email,
             total_salary_amount,
             total_salary_divisor,
             total_salary_multiplier,
@@ -956,7 +766,7 @@ async function replaceEfficiencyConfig(configMonth, normalizedPayload, userId) {
             group.group_name,
             group.manager_name,
             group.manager_user_id,
-            group.metrics_source,
+            group.manager_user_email,
             group.total_salary_amount,
             group.total_salary_divisor,
             group.total_salary_multiplier,
@@ -976,6 +786,9 @@ async function replaceEfficiencyConfig(configMonth, normalizedPayload, userId) {
               config_month,
               employee_id,
               seller_name,
+              seller_user_id,
+              seller_user_name,
+              seller_user_email,
               market_segment,
               months_in_role_label,
               months_in_role_value,
@@ -1002,6 +815,9 @@ async function replaceEfficiencyConfig(configMonth, normalizedPayload, userId) {
               configMonth,
               member.employee_id,
               member.seller_name,
+              member.seller_user_id,
+              member.seller_user_name,
+              member.seller_user_email,
               member.market_segment,
               member.months_in_role_label,
               member.months_in_role_value,
@@ -1023,33 +839,6 @@ async function replaceEfficiencyConfig(configMonth, normalizedPayload, userId) {
               userId,
             ]
           );
-
-          for (const manualMetric of member.manual_metrics || []) {
-            await connection.execute(
-              `INSERT INTO performance_efficiency_member_manual_metrics (
-                sheet_type,
-                config_month,
-                group_name,
-                seller_name,
-                metric_month,
-                revenue,
-                gross_profit,
-                created_by,
-                updated_by
-              ) VALUES (${EFFICIENCY_MANUAL_METRIC_INSERT_PLACEHOLDERS})`,
-              [
-                sheetType,
-                configMonth,
-                group.group_name,
-                member.seller_name,
-                manualMetric.metric_month,
-                manualMetric.revenue,
-                manualMetric.gross_profit,
-                userId,
-                userId,
-              ]
-            );
-          }
         }
       }
     }
@@ -1078,26 +867,26 @@ function normalizeConfigPayload(payload, configMonth) {
         config_month: configMonth,
         report_year: clampInt(sourceSheet.report_year, fallbackYear, 2000, 2100),
         ytd_month_number: clampInt(sourceSheet.ytd_month_number, fallbackMonth, 1, 12),
-        groups: normalizeGroups(sourceSheet.groups || [], clampInt(sourceSheet.report_year, fallbackYear, 2000, 2100)),
+        groups: normalizeGroups(sourceSheet.groups || []),
       }];
     })),
   };
 }
 
-function normalizeGroups(groups, reportYear) {
+function normalizeGroups(groups) {
   return Array.isArray(groups)
-    ? groups.map((group, index) => normalizeGroup(group, index, reportYear)).filter(Boolean)
+    ? groups.map((group, index) => normalizeGroup(group, index)).filter(Boolean)
     : [];
 }
 
-function normalizeGroup(group, index, reportYear) {
+function normalizeGroup(group, index) {
   const groupName = String(group?.group_name || group?.manager_name || '').trim();
   if (!groupName) {
     return null;
   }
 
   const normalizedManagerName = String(group?.manager_name || groupName).trim();
-  const normalizedMembers = normalizeMembers(group?.members || [], reportYear);
+  const normalizedMembers = normalizeMembers(group?.members || []);
   if (shouldDropGroup({
     group_name: groupName,
     manager_name: normalizedManagerName,
@@ -1110,7 +899,7 @@ function normalizeGroup(group, index, reportYear) {
     group_name: groupName,
     manager_name: normalizedManagerName,
     manager_user_id: toNullableInt(group?.manager_user_id),
-    metrics_source: normalizeMetricsSource(group?.metrics_source),
+    manager_user_email: toNullableString(group?.manager_user_email),
     total_salary_amount: toNullableNumber(group?.total_salary_amount),
     total_salary_divisor: nonZero(group?.total_salary_divisor, 1),
     total_salary_multiplier: nonZero(group?.total_salary_multiplier, 1),
@@ -1121,15 +910,15 @@ function normalizeGroup(group, index, reportYear) {
   };
 }
 
-function normalizeMembers(members, reportYear) {
+function normalizeMembers(members) {
   const normalizedMembers = Array.isArray(members)
-    ? members.map((member, index) => normalizeMember(member, index, reportYear)).filter(Boolean)
+    ? members.map((member, index) => normalizeMember(member, index)).filter(Boolean)
     : [];
 
   return sortMembersWithOtherLast(deduplicateMembers(normalizedMembers));
 }
 
-function normalizeMember(member, index, reportYear) {
+function normalizeMember(member, index) {
   const sellerName = String(member?.seller_name || '').trim();
   const isOtherRow = Boolean(member?.is_other_row) || sellerName.toLowerCase() === 'other';
   if (!sellerName && !isOtherRow) {
@@ -1139,6 +928,9 @@ function normalizeMember(member, index, reportYear) {
   return {
     seller_name: sellerName || 'Other',
     employee_id: String(member?.employee_id || '').trim(),
+    seller_user_id: toNullableInt(member?.seller_user_id),
+    seller_user_name: toNullableString(member?.seller_user_name),
+    seller_user_email: toNullableString(member?.seller_user_email),
     market_segment: String(member?.market_segment || '').trim(),
     months_in_role_label: String(member?.months_in_role_label || '').trim(),
     months_in_role_value: toNullableInt(member?.months_in_role_value),
@@ -1154,7 +946,6 @@ function normalizeMember(member, index, reportYear) {
     salary_multiplier: nonZero(member?.salary_multiplier, 1),
     salary_months_mode: normalizeMonthsMode(member?.salary_months_mode),
     salary_months_custom: toNullableInt(member?.salary_months_custom),
-    manual_metrics: normalizeManualMetrics(member?.manual_metrics || [], reportYear),
     is_other_row: isOtherRow,
     sort_order: clampInt(member?.sort_order, index, 0, 100000),
   };
@@ -1394,7 +1185,7 @@ function mapGroupRow(row) {
     group_name: String(row.group_name || ''),
     manager_name: String(row.manager_name || ''),
     manager_user_id: row.manager_user_id == null ? null : Number(row.manager_user_id),
-    metrics_source: normalizeMetricsSource(row.metrics_source),
+    manager_user_email: toNullableString(row.manager_user_email),
     total_salary_amount: toNullableNumber(row.total_salary_amount),
     total_salary_divisor: toNumber(row.total_salary_divisor || 1),
     total_salary_multiplier: toNumber(row.total_salary_multiplier || 1),
@@ -1411,6 +1202,9 @@ function mapMemberRow(row) {
     group_id: Number(row.group_id),
     employee_id: String(row.employee_id || ''),
     seller_name: String(row.seller_name || ''),
+    seller_user_id: row.seller_user_id == null ? null : Number(row.seller_user_id),
+    seller_user_name: toNullableString(row.seller_user_name),
+    seller_user_email: toNullableString(row.seller_user_email),
     market_segment: String(row.market_segment || ''),
     months_in_role_label: String(row.months_in_role_label || ''),
     months_in_role_value: row.months_in_role_value == null ? null : Number(row.months_in_role_value),
@@ -1426,25 +1220,9 @@ function mapMemberRow(row) {
     salary_multiplier: toNumber(row.salary_multiplier || 1),
     salary_months_mode: normalizeMonthsMode(row.salary_months_mode),
     salary_months_custom: row.salary_months_custom == null ? null : Number(row.salary_months_custom),
-    manual_metrics: [],
     is_other_row: Boolean(row.is_other_row),
     sort_order: Number(row.sort_order || 0),
   };
-}
-
-function mapManualMetricRow(row) {
-  const metricMonth = normalizeDateValue(row.metric_month);
-
-  return {
-    metric_month: metricMonth,
-    month_number: metricMonth ? parseInt(metricMonth.slice(5, 7), 10) : null,
-    revenue: toNumber(row.revenue),
-    gross_profit: toNumber(row.gross_profit),
-  };
-}
-
-function buildManualMetricLookupKey(groupName, sellerName) {
-  return `${normalizeLookupKey(groupName)}::${normalizeLookupKey(sellerName)}`;
 }
 
 function currentMonthStart() {
@@ -1487,8 +1265,26 @@ function normalizeLookupKey(value) {
     .join(' ');
 }
 
-function resolveSellerMetrics(memberConfig, metricsByMember) {
-  return metricsByMember.get(memberConfig) || EMPTY_METRICS;
+function normalizeLooseLookupKey(value) {
+  return normalizeLookupKey(value)
+    .split(' ')
+    .map((part) => part.replace(/[aeiou]/g, ''))
+    .filter(Boolean)
+    .join(' ');
+}
+
+function resolveSellerMetrics(sheetConfig, groupConfig, memberConfig, metricAssignments) {
+  if (!metricAssignments) {
+    return EMPTY_METRICS;
+  }
+
+  if (isOtherMember(memberConfig)) {
+    const groupKey = buildGroupAccessLookupKey(sheetConfig.sheet_type, groupConfig);
+    return metricAssignments.otherMetricsByGroup.get(groupKey) || EMPTY_METRICS;
+  }
+
+  const memberKey = buildMemberAccessLookupKey(sheetConfig.sheet_type, groupConfig, memberConfig);
+  return metricAssignments.memberMetrics.get(memberKey) || EMPTY_METRICS;
 }
 
 async function mergeWorkbookSeedDefaults(configMonth, sheets) {
@@ -1501,18 +1297,9 @@ async function mergeWorkbookSeedDefaults(configMonth, sheets) {
   await workbook.xlsx.readFile(WORKBOOK_PATH);
   const seedSheet = parseSalesProductivitySheet(workbook.getWorksheet(SHEET_DEFINITIONS.sales_productivity.workbookName), configMonth);
 
-  mergeSeedGroupsIntoSheet(targetSheet, seedSheet.groups || []);
-  mergeSeedGroupsIntoSheet(targetSheet, getSupplementalSeedGroups(targetSheet.sheet_type));
-}
-
-function mergeSeedGroupsIntoSheet(targetSheet, seedGroups) {
-  if (!targetSheet || !Array.isArray(seedGroups) || !seedGroups.length) {
-    return;
-  }
-
   const groupsByKey = new Map((targetSheet.groups || []).map((group) => [normalizeLookupKey(group.group_name || group.manager_name), group]));
 
-  seedGroups.forEach((seedGroup) => {
+  seedSheet.groups.forEach((seedGroup) => {
     const groupKey = normalizeLookupKey(seedGroup.group_name || seedGroup.manager_name);
     const existingGroup = groupsByKey.get(groupKey);
 
@@ -1542,94 +1329,106 @@ function mergeSeedGroupsIntoSheet(targetSheet, seedGroups) {
       existingGroup.total_salary_months_mode = seedGroup.total_salary_months_mode;
       existingGroup.total_salary_months_custom = seedGroup.total_salary_months_custom;
     }
-
-    if (!hasMeaningfulValue(existingGroup.metrics_source) && hasMeaningfulValue(seedGroup.metrics_source)) {
-      existingGroup.metrics_source = seedGroup.metrics_source;
-    }
   });
 }
 
-function getSupplementalSeedGroups(sheetType) {
-  if (sheetType !== 'sales_productivity') {
-    return [];
+async function applyInheritedAccessAssignments(configMonth, sheets) {
+  const sourceMonth = await findInheritedAccessSourceMonth(configMonth);
+  if (!sourceMonth) {
+    return;
   }
 
-  return [createMirnaCastilloManualGroup()];
+  const [groupRows] = await pool.query(
+    `SELECT sheet_type, group_name, manager_name, manager_user_id, manager_user_email
+       FROM performance_efficiency_groups
+      WHERE config_month = ?`,
+    [sourceMonth]
+  );
+  const [memberRows] = await pool.query(
+    `SELECT
+        m.sheet_type,
+        g.group_name,
+        g.manager_name,
+        m.employee_id,
+        m.seller_name,
+        m.seller_user_id,
+        m.seller_user_name,
+        m.seller_user_email
+       FROM performance_efficiency_members m
+       INNER JOIN performance_efficiency_groups g ON g.id = m.group_id
+      WHERE m.config_month = ?`,
+    [sourceMonth]
+  );
+
+  const groupsByKey = new Map(
+    groupRows.map((row) => [buildGroupAccessLookupKey(row.sheet_type, row), row])
+  );
+  const membersByKey = new Map(
+    memberRows.map((row) => [buildMemberAccessLookupKey(row.sheet_type, row, row), row])
+  );
+
+  Object.entries(sheets || {}).forEach(([sheetType, sheet]) => {
+    (sheet?.groups || []).forEach((group) => {
+      const inheritedGroup = groupsByKey.get(buildGroupAccessLookupKey(sheetType, group));
+      if (inheritedGroup) {
+        if (group.manager_user_id == null && inheritedGroup.manager_user_id != null) {
+          group.manager_user_id = Number(inheritedGroup.manager_user_id);
+        }
+        if (!group.manager_user_email && inheritedGroup.manager_user_email) {
+          group.manager_user_email = String(inheritedGroup.manager_user_email);
+        }
+      }
+
+      (group?.members || []).forEach((member) => {
+        const inheritedMember = membersByKey.get(buildMemberAccessLookupKey(sheetType, group, member));
+        if (!inheritedMember) {
+          return;
+        }
+
+        if (member.seller_user_id == null && inheritedMember.seller_user_id != null) {
+          member.seller_user_id = Number(inheritedMember.seller_user_id);
+        }
+        if (!member.seller_user_name && inheritedMember.seller_user_name) {
+          member.seller_user_name = String(inheritedMember.seller_user_name);
+        }
+        if (!member.seller_user_email && inheritedMember.seller_user_email) {
+          member.seller_user_email = String(inheritedMember.seller_user_email);
+        }
+      });
+    });
+  });
 }
 
-function createMirnaCastilloManualGroup() {
-  return {
-    group_name: 'Mirna Castillo',
-    manager_name: 'Mirna Castillo',
-    manager_user_id: null,
-    metrics_source: 'manual_monthly',
-    total_salary_amount: null,
-    total_salary_divisor: 1,
-    total_salary_multiplier: 1,
-    total_salary_months_mode: 'period',
-    total_salary_months_custom: null,
-    sort_order: 9999,
-    members: [
-      createSupplementalManualMember({
-        seller_name: 'David Saucedo',
-        market_segment: 'Engatel',
-        yearly_it_other_target: 1550,
-        yearly_total_target: 1550,
-        salary_amount: 6,
-        sort_order: 0,
-      }),
-      createSupplementalManualMember({
-        seller_name: 'Margarita Robles',
-        market_segment: 'General',
-        yearly_it_other_target: 1200,
-        yearly_total_target: 1200,
-        salary_amount: 4,
-        sort_order: 1,
-      }),
-      createSupplementalManualMember({
-        seller_name: 'Yelena Coco',
-        market_segment: 'General',
-        yearly_it_other_target: 1200,
-        yearly_total_target: 1200,
-        salary_amount: 4,
-        sort_order: 2,
-      }),
-      createSupplementalManualMember({
-        seller_name: 'Other',
-        market_segment: '',
-        yearly_it_other_target: 0,
-        yearly_total_target: 0,
-        salary_amount: 12,
-        sort_order: 3,
-        is_other_row: true,
-      }),
-    ],
-  };
+async function findInheritedAccessSourceMonth(configMonth) {
+  const [[row]] = await pool.query(
+    `SELECT MAX(config_month) AS config_month
+       FROM (
+         SELECT config_month
+           FROM performance_efficiency_groups
+          WHERE config_month < ?
+            AND (manager_user_id IS NOT NULL OR manager_user_email IS NOT NULL)
+         UNION ALL
+         SELECT config_month
+           FROM performance_efficiency_members
+          WHERE config_month < ?
+            AND (
+              seller_user_id IS NOT NULL
+              OR seller_user_name IS NOT NULL
+              OR seller_user_email IS NOT NULL
+            )
+       ) access_assignments`,
+    [configMonth, configMonth]
+  );
+
+  return normalizeConfigMonth(row?.config_month);
 }
 
-function createSupplementalManualMember(values) {
-  return {
-    employee_id: '',
-    seller_name: values.seller_name,
-    market_segment: values.market_segment,
-    months_in_role_label: values.is_other_row ? '' : '12+',
-    months_in_role_value: values.is_other_row ? null : 12,
-    yearly_printing_target: 0,
-    yearly_it_other_target: values.yearly_it_other_target,
-    yearly_rental_target: 0,
-    yearly_total_target: values.yearly_total_target,
-    yearly_gp_target_rate: SHEET_DEFINITIONS.sales_productivity.defaultGpRate,
-    plan_months_mode: 'period',
-    plan_months_custom: null,
-    salary_amount: values.salary_amount,
-    salary_divisor: 1,
-    salary_multiplier: 1,
-    salary_months_mode: 'custom',
-    salary_months_custom: 1,
-    manual_metrics: [],
-    is_other_row: Boolean(values.is_other_row),
-    sort_order: values.sort_order,
-  };
+function buildGroupAccessLookupKey(sheetType, group) {
+  return `${sheetType}:${normalizeLookupKey(group?.group_name || group?.manager_name)}`;
+}
+
+function buildMemberAccessLookupKey(sheetType, group, member) {
+  return `${buildGroupAccessLookupKey(sheetType, group)}:${buildMemberLookupKey(member)}`;
 }
 
 function buildMemberLookupKey(member) {
@@ -1646,61 +1445,68 @@ function buildMemberLookupKey(member) {
   return 'member:unknown';
 }
 
-function normalizeMetricsSource(value) {
-  return value === 'manual_monthly' ? 'manual_monthly' : 'sales_upload';
+function normalizeMonthsMode(value) {
+  return ['period', 'months_in_role', 'custom'].includes(value) ? value : 'period';
 }
 
-function isManualMetricsGroup(group) {
-  return normalizeMetricsSource(group?.metrics_source) === 'manual_monthly';
-}
-
-function normalizeManualMetrics(manualMetrics, reportYear) {
-  if (!Array.isArray(manualMetrics)) {
-    return [];
-  }
-
-  return manualMetrics
-    .map((entry) => normalizeManualMetric(entry, reportYear))
-    .filter(Boolean)
-    .sort((left, right) => String(left.metric_month).localeCompare(String(right.metric_month)));
-}
-
-function normalizeManualMetric(entry, reportYear) {
-  const metricMonth = normalizeManualMetricMonth(entry?.metric_month, reportYear);
-  if (!metricMonth) {
-    return null;
-  }
-
-  const revenue = toNullableNumber(entry?.revenue);
-  const grossProfit = toNullableNumber(entry?.gross_profit);
-  if (revenue == null && grossProfit == null) {
-    return null;
-  }
-
+function buildExportRow(group, member) {
   return {
-    metric_month: metricMonth,
-    month_number: parseInt(metricMonth.slice(5, 7), 10),
-    revenue: revenue == null ? 0 : revenue,
-    gross_profit: grossProfit == null ? 0 : grossProfit,
+    group_name: group?.group_name || '',
+    manager_name: group?.manager_name || '',
+    seller_name: member?.seller_name || '',
+    market_segment: member?.market_segment || '',
+    months_in_role_label: member?.months_in_role_label || '',
+    yearly_total_target: member?.yearly_total_target || 0,
+    yearly_total_target_gp: member?.yearly_total_target_gp || 0,
+    ytd_target_revenue: member?.ytd_target_revenue || 0,
+    ytd_target_profit: member?.ytd_target_profit || 0,
+    ytd_revenue: member?.ytd_revenue || 0,
+    ytd_profit: member?.ytd_profit || 0,
+    ytd_plan_percent_revenue: member?.ytd_plan_percent_revenue || 0,
+    ytd_plan_percent_profit: member?.ytd_plan_percent_profit || 0,
+    salary_fully_loaded: member?.salary_fully_loaded || 0,
+    efficiency_rate: member?.efficiency_rate || 0,
   };
 }
 
-function normalizeManualMetricMonth(value, reportYear) {
-  const normalized = normalizeDateValue(value);
-  if (normalized) {
-    return `${normalized.slice(0, 7)}-01`;
-  }
-
-  const monthNumber = clampInt(value?.month_number || value?.monthNumber || value?.month, null, 1, 12);
-  if (!Number.isFinite(monthNumber) || !Number.isFinite(Number(reportYear))) {
-    return null;
-  }
-
-  return `${reportYear}-${String(monthNumber).padStart(2, '0')}-01`;
+function buildExportTotalsRow(group) {
+  return {
+    group_name: `TOTAL ${group?.group_name || ''}`.trim(),
+    manager_name: group?.manager_name || '',
+    seller_name: '',
+    market_segment: '',
+    months_in_role_label: '',
+    yearly_total_target: group?.totals?.yearly_total_target || 0,
+    yearly_total_target_gp: group?.totals?.yearly_total_target_gp || 0,
+    ytd_target_revenue: group?.totals?.ytd_target_revenue || 0,
+    ytd_target_profit: group?.totals?.ytd_target_profit || 0,
+    ytd_revenue: group?.totals?.ytd_revenue || 0,
+    ytd_profit: group?.totals?.ytd_profit || 0,
+    ytd_plan_percent_revenue: group?.totals?.ytd_plan_percent_revenue || 0,
+    ytd_plan_percent_profit: group?.totals?.ytd_plan_percent_profit || 0,
+    salary_fully_loaded: group?.totals?.salary_fully_loaded || 0,
+    efficiency_rate: group?.totals?.efficiency_rate || 0,
+  };
 }
 
-function normalizeMonthsMode(value) {
-  return ['period', 'months_in_role', 'custom'].includes(value) ? value : 'period';
+function buildExportGrandTotalsRow(sheet) {
+  return {
+    group_name: 'TOTAL GENERAL',
+    manager_name: '',
+    seller_name: '',
+    market_segment: '',
+    months_in_role_label: '',
+    yearly_total_target: sheet?.grand_totals?.yearly_total_target || 0,
+    yearly_total_target_gp: sheet?.grand_totals?.yearly_total_target_gp || 0,
+    ytd_target_revenue: sheet?.grand_totals?.ytd_target_revenue || 0,
+    ytd_target_profit: sheet?.grand_totals?.ytd_target_profit || 0,
+    ytd_revenue: sheet?.grand_totals?.ytd_revenue || 0,
+    ytd_profit: sheet?.grand_totals?.ytd_profit || 0,
+    ytd_plan_percent_revenue: sheet?.grand_totals?.ytd_plan_percent_revenue || 0,
+    ytd_plan_percent_profit: sheet?.grand_totals?.ytd_plan_percent_profit || 0,
+    salary_fully_loaded: sheet?.grand_totals?.salary_fully_loaded || 0,
+    efficiency_rate: sheet?.grand_totals?.efficiency_rate || 0,
+  };
 }
 
 function scaleWorkbookMoney(value) {
@@ -1726,7 +1532,6 @@ function normalizeSheetOutput(sheet) {
       .sort((left, right) => Number(left?.sort_order || 0) - Number(right?.sort_order || 0))
       .map((group, index) => ({
         ...group,
-        metrics_source: normalizeMetricsSource(group?.metrics_source),
         sort_order: index,
         members: sortMembersWithOtherLast(deduplicateMembers(group.members || [])),
       })),
@@ -1865,16 +1670,17 @@ function toNullableInt(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function toNullableString(value) {
+  const normalized = String(value || '').trim();
+  return normalized ? normalized : null;
+}
+
 function toNumber(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function toNullableNumber(value) {
-  if (value == null || value === '') {
-    return null;
-  }
-
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
@@ -1894,6 +1700,9 @@ const MEMBER_MERGE_FIELDS = [
   'group_id',
   'employee_id',
   'seller_name',
+  'seller_user_id',
+  'seller_user_name',
+  'seller_user_email',
   'market_segment',
   'months_in_role_label',
   'months_in_role_value',
@@ -1909,10 +1718,11 @@ const MEMBER_MERGE_FIELDS = [
   'salary_multiplier',
   'salary_months_mode',
   'salary_months_custom',
-  'manual_metrics',
 ];
 
 module.exports = {
+  exportEfficiencyProductivityWorkbook,
+  getEfficiencyAccessSummary,
   getEfficiencyConfig,
   getEfficiencyOverview,
   saveEfficiencyConfig,

@@ -149,8 +149,17 @@ const STATEMENTS = [
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
   `ALTER TABLE performance_efficiency_groups
       ADD COLUMN IF NOT EXISTS metrics_source ENUM('sales_upload','manual_monthly') NOT NULL DEFAULT 'sales_upload' AFTER manager_user_id`,
+    `ALTER TABLE performance_efficiency_groups
+      ADD COLUMN IF NOT EXISTS manager_user_email VARCHAR(255) NULL DEFAULT NULL AFTER manager_user_id`,
   `ALTER TABLE performance_efficiency_members
       ADD COLUMN IF NOT EXISTS employee_id VARCHAR(100) NOT NULL DEFAULT '' AFTER config_month`,
+    `ALTER TABLE performance_efficiency_members
+      ADD COLUMN IF NOT EXISTS seller_user_id BIGINT NULL DEFAULT NULL AFTER seller_name`,
+    `ALTER TABLE performance_efficiency_members
+      ADD COLUMN IF NOT EXISTS seller_user_name VARCHAR(255) NULL DEFAULT NULL AFTER seller_user_id`,
+    `ALTER TABLE performance_efficiency_members
+      ADD COLUMN IF NOT EXISTS seller_user_email VARCHAR(255) NULL DEFAULT NULL AFTER seller_user_name`,
+    'ALTER TABLE performance_efficiency_members ADD INDEX idx_eff_member_user (seller_user_id)',
   `CREATE TABLE IF NOT EXISTS contract_series (
     id                    BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
     segment               VARCHAR(255)    NOT NULL DEFAULT '',

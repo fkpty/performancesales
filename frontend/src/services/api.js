@@ -78,6 +78,57 @@ function cleanParams(params = {}) {
   );
 }
 
+function getDownloadFilename(contentDisposition = '') {
+  const match = /filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i.exec(contentDisposition);
+  const rawName = match?.[1] || match?.[2] || '';
+  return rawName ? decodeURIComponent(rawName) : '';
+}
+
+async function normalizeBlobRequestError(error) {
+  const blob = error?.response?.data;
+
+  if (blob instanceof Blob) {
+    const text = await blob.text();
+    let message = text || error.message || 'No se pudo completar la exportacion.';
+
+    try {
+      const parsed = JSON.parse(text);
+      message = parsed?.error || parsed?.message || message;
+    } catch {
+      // Keep the raw response text when the backend did not return JSON.
+    }
+
+    throw new Error(message);
+  }
+
+  throw error;
+}
+
+async function downloadFile(url, params = {}) {
+  try {
+    const response = await api.get(url, {
+      params: cleanParams(params),
+      responseType: 'blob',
+    });
+
+    const filename = getDownloadFilename(response.headers['content-disposition']) || `export-${Date.now()}.xlsx`;
+    const blob = response.data instanceof Blob ? response.data : new Blob([response.data]);
+    const downloadUrl = window.URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+
+    anchor.href = downloadUrl;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.URL.revokeObjectURL(downloadUrl);
+
+    return filename;
+  } catch (error) {
+    return normalizeBlobRequestError(error);
+  }
+}
+
 export const fetchPerformanceOverview = (params) =>
   api.get('/performance/overview', { params: cleanParams(params) }).then(r => r.data);
 
@@ -105,11 +156,26 @@ export const uploadPerformanceReport = (reportType, file, onProgress) => {
 export const fetchEfficiencyOverview = (params) =>
   api.get('/efficiency/overview', { params: cleanParams(params) }).then(r => r.data);
 
+export const fetchEfficiencyAccess = (params) =>
+  api.get('/efficiency/access', { params: cleanParams(params) }).then(r => r.data);
+
+export const exportEfficiencyProductivity = (params) =>
+  downloadFile('/efficiency/export', params);
+
 export const fetchEfficiencyConfig = (params) =>
   api.get('/efficiency/config', { params: cleanParams(params) }).then(r => r.data);
 
+export const fetchEfficiencyUsers = () =>
+  api.get('/efficiency/users').then(r => r.data);
+
 export const saveEfficiencyConfig = (params, data) =>
   api.put('/efficiency/config', data, { params: cleanParams(params) }).then(r => r.data);
+
+export const exportContracts = (params) =>
+  downloadFile('/contracts/export', params);
+
+export const exportContractSeries = (params) =>
+  downloadFile('/contracts/series/export', params);
 
 // ─── Settings ──────────────────────────────────────────────────
 export const fetchSettings = () =>

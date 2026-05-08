@@ -74,6 +74,7 @@ function createUploadsState() {
 
 const usePerformanceStore = create((set, get) => ({
   authUser: null,
+  accessContext: null,
   canUploadReports: false,
 
   year: currentYear,
@@ -116,6 +117,12 @@ const usePerformanceStore = create((set, get) => ({
         normalizedUser?.canUploadReports ||
         hasUploadRole(normalizedUser)
       ),
+    });
+  },
+
+  setAccessContext: (accessContext) => {
+    set({
+      accessContext: accessContext && typeof accessContext === 'object' ? accessContext : null,
     });
   },
 
