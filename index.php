@@ -27,23 +27,38 @@ function detectAppPublicBase(): string
         (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https')
     );
     $scheme = $isHttps ? 'https' : 'http';
-    $host = $_SERVER['HTTP_HOST'] ?? 'hub.collab.grouppbs.com';
+    $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
 
     return $scheme . '://' . $host;
 }
 
-define('HUB_LOGIN_URL', contractosEnv('HUB_LOGIN_URL', 'https://hub.collab.grouppbs.com/login'));
 define('APP_PUBLIC_BASE', contractosEnv('APP_PUBLIC_BASE', detectAppPublicBase()));
-define('API_UPSTREAM_BASE', contractosEnv('API_UPSTREAM_BASE', 'http://10.0.0.187:3003'));
+define('HUB_LOGIN_URL', contractosEnv('HUB_LOGIN_URL', APP_PUBLIC_BASE . '/login'));
+define('API_UPSTREAM_BASE', contractosEnv('API_UPSTREAM_BASE', 'http://127.0.0.1:3003'));
 define('API_PROXY_SHARED_SECRET', contractosEnv('API_PROXY_SHARED_SECRET', 'replace_with_shared_proxy_secret'));
 define('APP_TOKEN_COOKIE', contractosEnv('APP_TOKEN_COOKIE', 'performance_sales_token'));
-define('API_UPSTREAM_FALLBACKS', contractosEnv('API_UPSTREAM_FALLBACKS', 'http://10.0.0.187:3003'));
+define('API_UPSTREAM_FALLBACKS', contractosEnv('API_UPSTREAM_FALLBACKS', 'http://127.0.0.1:3003'));
 define('API_BACKEND_DIR', contractosEnv('API_BACKEND_DIR', __DIR__ . DIRECTORY_SEPARATOR . 'backend'));
 define('API_BACKEND_AUTO_START', contractosEnv('API_BACKEND_AUTO_START', '1'));
 define('API_BACKEND_START_COMMAND', contractosEnv('API_BACKEND_START_COMMAND', 'node src/app.js'));
 define('API_BACKEND_NODE_BINARY', contractosEnv('API_BACKEND_NODE_BINARY', detectDefaultNodeBinaryPath()));
 define('API_BACKEND_START_GRACE_MS', contractosEnv('API_BACKEND_START_GRACE_MS', '12000'));
 define('API_BACKEND_START_THROTTLE_SECONDS', contractosEnv('API_BACKEND_START_THROTTLE_SECONDS', '20'));
+
+function buildFrameAncestorsDirective(): string
+{
+    return contractosEnv('APP_FRAME_ANCESTORS', "'self'");
+}
+
+function hasValidDebugToken(?string $token): bool
+{
+    $configuredToken = contractosEnv('APP_DEBUG_TOKEN', '');
+
+    return $configuredToken !== ''
+        && is_string($token)
+        && $token !== ''
+        && hash_equals($configuredToken, $token);
+}
 
 require_once __DIR__ . '/auth-bridge.php';
 
@@ -57,7 +72,7 @@ if (shouldForceHttps()) {
 
 if (strpos($requestPath, '/performance-sales/api') === 0) {
     // Diagnostic endpoint (PHP-handled, never proxied to Node)
-    if ($requestPath === '/performance-sales/api/auth/debug' && isset($_GET['token']) && $_GET['token'] === 'ps-debug-2026') {
+    if ($requestPath === '/performance-sales/api/auth/debug' && hasValidDebugToken($_GET['token'] ?? null)) {
         header('Content-Type: text/plain; charset=UTF-8');
         echo "=== Performance Sales Auth Diagnostic ===\n\n";
         echo "Request path : $requestPath\n";
@@ -65,8 +80,8 @@ if (strpos($requestPath, '/performance-sales/api') === 0) {
         echo "HTTPS        : " . ($_SERVER['HTTPS'] ?? 'off') . "\n";
         echo "Sec-Fetch    : " . ($_SERVER['HTTP_SEC_FETCH_DEST'] ?? '?') . "\n";
         echo "Cookies      : " . (empty($_COOKIE) ? '[ninguna]' : implode(', ', array_keys($_COOKIE))) . "\n";
-        $hubCookie = getenv('HUB_SESSION_COOKIE') ?: 'pbs_panama_hub_session';
-        foreach ([$hubCookie, 'pbs_panama_hub_session', 'pbs-panama-hub-session', 'laravel_session'] as $cn) {
+        $hubCookie = getenv('HUB_SESSION_COOKIE') ?: 'laravel_session';
+        foreach ([$hubCookie, 'laravel_session', 'hub_session', 'PHPSESSID'] as $cn) {
             if (!empty($_COOKIE[$cn])) {
                 echo "Hub cookie '$cn': len=" . strlen($_COOKIE[$cn]) . "\n";
             }
@@ -85,7 +100,8 @@ if (strpos($requestPath, '/performance-sales/api') === 0) {
     if ($requestPath === '/performance-sales/api/auth/whoami') {
         header('Content-Type: application/json; charset=UTF-8');
         header('Cache-Control: no-store, no-cache');
-        $user = validateHubAccess();
+        $forceRefresh = isset($_GET['force']) && $_GET['force'] === '1';
+        $user = validateHubAccess($forceRefresh);
         if ($user) {
             echo json_encode([
                 'ok' => true,
@@ -208,7 +224,7 @@ if (strpos($requestPath, '/performance-sales/api') === 0) {
 $user = validateHubAccess();
 
 // Debug mode: ?debug accessible only from the server itself
-if ($user === null && isset($_GET['debug']) && in_array($_SERVER['REMOTE_ADDR'], ['::1', '10.0.0.187', '::ffff:10.0.0.187'], true)) {
+if ($user === null && isset($_GET['debug']) && in_array($_SERVER['REMOTE_ADDR'] ?? '', contractosTrustedLocalIps(), true)) {
     header('Content-Type: text/plain; charset=UTF-8');
     echo "=== Performance Sales Auth Debug ===\n\n";
     echo "REMOTE_ADDR : " . $_SERVER['REMOTE_ADDR'] . "\n";
@@ -258,7 +274,7 @@ header('Pragma: no-cache');
 // Security headers (no X-Frame-Options – allow same-origin iframe embedding)
 header('X-Content-Type-Options: nosniff');
 header('Referrer-Policy: strict-origin-when-cross-origin');
-header("Content-Security-Policy: frame-ancestors 'self' https://hub.collab.grouppbs.com https://10.0.0.187");
+header('Content-Security-Policy: frame-ancestors ' . buildFrameAncestorsDirective());
 
 $html = file_get_contents($indexFile);
 if ($html === false) {
@@ -742,7 +758,7 @@ function shouldForceHttps(): bool
     }
 
     $remote = $_SERVER['REMOTE_ADDR'] ?? '';
-    return !in_array($remote, ['::1', '10.0.0.187', '::ffff:10.0.0.187'], true);
+    return !in_array($remote, contractosTrustedLocalIps(), true);
 }
 
 function buildEfficiencyAccessSummaryResponse(array $params, array $user): array

@@ -7,7 +7,7 @@ const pool = require('../db/connection');
 const COOKIE_NAME = process.env.AUTH_COOKIE || 'performance_sales_token';
 const PROXY_SHARED_SECRET = process.env.PROXY_SHARED_SECRET || 'replace_with_shared_proxy_secret';
 const ALLOW_LOCAL_DEV_AUTH = process.env.ALLOW_LOCAL_DEV_AUTH === '1';
-const TRUSTED_PUBLIC_HOST = process.env.APP_PUBLIC_HOST || '10.0.0.187';
+const TRUSTED_PUBLIC_HOST = process.env.APP_PUBLIC_HOST || 'localhost';
 
 async function authMiddleware(req, res, next) {
   try {

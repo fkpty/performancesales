@@ -1,183 +1,149 @@
-# ContractFlow
+# Performance Sales
 
-**Dashboard interactivo para análisis de contratos empresariales**  
-Stack: React + Vite · Node.js/Express · MySQL · PHP auth bridge (PBS Hub)
+Aplicación web para seguimiento de performance comercial, contratos, eficiencia operativa y cargas de reportes.
 
----
+## Stack
 
-## Requisitos previos
+- Frontend: React + Vite
+- Backend API: Node.js + Express
+- Entrada web: PHP + auth bridge
+- Base de datos principal: MySQL
+- Fuentes externas opcionales: SQL Server
 
-| Herramienta | Versión mínima |
-|---|---|
-| XAMPP (Apache + MySQL 8+) | 8.x |
-| Node.js | 18+ |
-| npm | 9+ |
-| PHP | 7.4+ (incluido en XAMPP) |
+## Estructura
 
----
-
-## Estructura del proyecto
-
-```
-c:\xampp\htdocs\contractos\
-├── Design/               ← diseño original (referencia)
-├── index.php             ← entry point Apache + auth gate
-├── auth-bridge.php       ← valida sesión PBS Hub
-├── config.php            ← overrides locales (opcional)
-├── .htaccess             ← mod_rewrite rules
-├── public/               ← build de React (generado con `npm run build`)
-├── frontend/             ← código fuente Vite + React
-└── backend/              ← Node.js Express API (puerto 3001)
+```text
+performance-sales/
+├── auth-bridge.php        # valida sesión y emite el token de la app
+├── config.example.php     # plantilla segura para overrides locales
+├── config.php             # overrides locales ignorados por git
+├── index.php              # entry point PHP / proxy / shell de la SPA
+├── backend/               # API Express y scripts de base de datos
+├── frontend/              # código fuente React + Vite
+├── public/                # build generado del frontend
+└── uploads/               # archivos cargados en runtime
 ```
 
----
+## Requisitos
 
-## Setup en 5 pasos
+- PHP 7.4+
+- Node.js 18+
+- npm 9+
+- MySQL 8+
+- SQL Server accesible, si vas a usar sincronizaciones externas
 
-### 1. Crear la base de datos
+## Puesta en marcha
 
-Con XAMPP corriendo, abre phpMyAdmin o MySQL CLI y ejecuta:
+### 1. Instalar dependencias
 
 ```bash
-cd c:\xampp\htdocs\contractos\backend
+cd backend
 npm install
-npm run setup-db
+
+cd ../frontend
+npm install
 ```
 
-Esto crea `contractos_db` con todas las tablas y los defaults de configuración.
-
-### 2. Configurar variables de entorno del backend
+### 2. Configurar el backend
 
 ```bash
 cd backend
 copy .env.example .env
 ```
 
-Edita `backend\.env` si tu MySQL tiene contraseña:
+Ajusta al menos estas variables en `backend/.env`:
 
-```env
-DB_PASSWORD=tu_password_mysql
-```
+- `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`
+- `HUB_DB_NAME`, `HUB_DB_USER`, `HUB_DB_PASSWORD`
+- `CORS_ORIGINS`
+- `PROXY_SHARED_SECRET`
+- `PERFORMANCE_SALES_EMBED_SECRET`
+- `SQLSERVER_*` si usarás sincronización desde SQL Server
 
-Si el hub tiene base de datos con nombre diferente al default `pbs_hub`, ajusta también:
-
-```env
-HUB_DB_NAME=pbs_hub
-```
-
-### 3. Iniciar el servidor Node.js
+### 3. Configurar el bridge PHP
 
 ```bash
-cd c:\xampp\htdocs\contractos\backend
-npm run dev       # con hot-reload (desarrollo)
-# o
-npm start         # producción
+copy config.example.php config.php
 ```
 
-La API queda disponible en **http://10.0.0.187:3001** y el proxy público la expone en **https://hub.collab.grouppbs.com/contratos/api**.
+Define en `config.php` los valores reales de tu entorno:
 
-### 4. Construir el frontend
+- `HUB_APP_KEY`
+- `HUB_SESSION_COOKIE`
+- `HUB_LOGIN_URL`
+- `APP_PUBLIC_BASE`
+- `API_UPSTREAM_BASE`
+- `API_PROXY_SHARED_SECRET`
+- `PERFORMANCE_SALES_EMBED_SECRET`
+- credenciales `APP_DB_*` y `HUB_DB_*`
+
+### 4. Preparar la base de datos
 
 ```bash
-cd c:\xampp\htdocs\contractos\frontend
-npm install
+cd backend
+npm run setup-db
+```
+
+### 5. Levantar el entorno
+
+Backend:
+
+```bash
+cd backend
+npm run dev
+```
+
+Frontend en desarrollo:
+
+```bash
+cd frontend
+npm run dev
+```
+
+Build para PHP/Apache:
+
+```bash
+cd frontend
 npm run build
 ```
 
-El build se genera en `c:\xampp\htdocs\contractos\public\`.
+El build se escribe en `public/`. Ese contenido es generado y no se versiona en Git.
 
-Para desarrollo con hot-reload:
+## Producción
 
-```bash
-npm run dev
-# → http://10.0.0.187:5173  (sin auth gate)
-```
+- Apache/PHP sirve `index.php` y el build en `public/`.
+- El backend Express se ejecuta por separado y atiende `/api`.
+- El bridge PHP valida la sesión del hub y sincroniza el token HTTP-only que usa la API.
+- Si necesitas iframe embedding, configura `APP_FRAME_ANCESTORS` en `config.php`.
 
-### 5. Registrar la tool en PBS Hub
+## Variables relevantes
 
-Para que el auth bridge funcione, el tool debe estar registrado en el panel de administración del PBS Hub:
+- `APP_ALLOW_LOCAL_DEV_AUTH=1` permite pruebas locales sin cookie del hub.
+- `APP_TRUSTED_LOCAL_IPS` define qué IPs cuentan como entorno local confiable.
+- `APP_DEBUG_TOKEN` habilita el endpoint de diagnóstico PHP sólo cuando se define explícitamente.
+- `VITE_API_PROXY_TARGET` permite cambiar el proxy del dev server sin tocar el repo.
 
-1. Accede al hub con una cuenta admin.
-2. Ve a **Admin → Tools → Create**.
-3. Rellena:
-   - **Name**: ContractFlow
-   - **URL**: `https://10.0.0.187/performance-sales/`
-   - **Category**: IT & Systems (o la que prefieras)
-   - **Is Active**: ✓
-4. Asigna acceso por usuario (`tool_user`) o departamento (`tool_department`).
+## Archivos locales que no deben publicarse
 
----
-
-## Uso
-
-1. Accede desde el PBS Hub → click en la tool **ContractFlow**.
-2. Sincroniza **Contratos vigentes** desde SQL Server con el botón **Actualizar fuentes**.
-3. Sincroniza también **Vencidos y cancelados** desde el mismo modal, sin archivo intermedio.
-4. Selecciona el año con el selector en el header.
-5. Filtra con **Global Filters** o haz clic en el gráfico de doughnut.
-6. Exporta la tabla con el botón **Export**.
-7. Configura el umbral AT RISK en **Settings**.
-
----
-
-## Sincronización SQL Server
-
-Los datasets de **Vigentes** y **Vencidos y cancelados** se sincronizan directamente desde SQL Server.
-
-- **Vigentes**: usa el query agregado por cliente/contrato y excluye tipos de contrato `USI` y `GAR`.
-- **Vencidos y cancelados**: usa el query histórico sobre `Pan_Gc_Mae_Contrato`, `Pan_vwXlar_GC_Precios_Cancelaciones` y `Pan_vwXlar_GC_Precios_Fact12_Cancelaciones`, tomando contratos con `FECHA FINAL` entre `2025-01-01` y la fecha actual.
-- **Responsable**: tanto vigentes como vencidos/cancelados llenan `commercial_owner` desde `Pl_Cem_Nombre`.
-
----
-
-## API Reference
-
-Base URL (upstream interno): `http://10.0.0.187:3001/api`
-
-Base URL (pública vía PHP proxy): `https://hub.collab.grouppbs.com/contratos/api`
-
-| Método | Ruta | Descripción |
-|---|---|---|
-| `GET` | `/health` | Health check (sin auth) |
-| `POST` | `/upload` | Sube y parsea Excel (field: `file`) |
-| `GET` | `/contracts` | Lista paginada con filtros |
-| `GET` | `/contracts/filters` | Valores distintos para dropdowns |
-| `GET` | `/analytics/kpis?year=` | 5 KPIs + delta vs PY |
-| `GET` | `/analytics/charts?year=` | Doughnut, Line, Bar data |
-| `GET` | `/analytics/expiry?year=` | Heatmap de vencimientos |
-| `GET` | `/settings` | Configuración actual |
-| `PUT` | `/settings` | Actualiza configuración |
-
-All API endpoints (except `/health`) require the `contractos_token` cookie.
-
----
+- `config.php`
+- `backend/.env`
+- `uploads/`
+- `public/index.html` y `public/assets/` generados por Vite
 
 ## Troubleshooting
 
-### "Session expired or invalid" en llamadas API
-→ El `contractos_token` expiró (8h). Recarga la página para que `index.php` lo renueve.
+### La SPA no carga
 
-### "DB Connection failed"
-→ Verifica que XAMPP MySQL esté corriendo y que `backend/.env` tenga el password correcto.
+Ejecuta `npm run build` dentro de `frontend/` para regenerar `public/index.html` y `public/assets/`.
 
-### La sincronización de vigentes falla
-→ Verifica que SQL Server sea accesible desde el backend y que `backend/.env` tenga `SQLSERVER_HOST`, `SQLSERVER_DB_NAME`, `SQLSERVER_USER` y `SQLSERVER_PASSWORD` correctos.
+### La API responde 401
 
-### Gráficas vacías
-→ Ejecuta la sincronización de vigentes y de vencidos/cancelados desde el modal de carga. Los datos se muestran dinámicamente por el año seleccionado.
+Verifica que el bridge PHP esté emitiendo el cookie `performance_sales_token` y que el hub session cookie configurado sea correcto.
 
-### El frontend no carga estilos
-→ Ejecuta `npm run build` en `frontend/`. La carpeta `public/` debe existir y contener `index.html`.
+### La API no inicia
 
-### Apache no redirige a `index.php`
-→ Verifica que `mod_rewrite` esté habilitado en XAMPP (`httpd.conf`).
+Revisa `backend/.env`, confirma acceso a MySQL y valida el puerto configurado en `PORT`.
 
----
+### La sincronización externa falla
 
-## Seguridad
-
-- Todas las queries usan **prepared statements** (sin SQL injection).
-- El `contractos_token` es `HttpOnly`, `SameSite=Strict`.
-- El API valida el token en cada request antes de cualquier query.
-- Rate limiting (120 req/min general, 10 req/min en upload).
-- Headers de seguridad: `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`.
+Confirma `SQLSERVER_HOST`, `SQLSERVER_PORT`, `SQLSERVER_DB_NAME`, `SQLSERVER_USER` y `SQLSERVER_PASSWORD`.

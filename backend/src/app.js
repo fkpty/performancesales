@@ -25,7 +25,7 @@ const BIND_HOST = process.env.BIND_HOST || '0.0.0.0';
 const publicDir = path.resolve(__dirname, '..', '..', 'public');
 
 // ─── CORS ────────────────────────────────────────────────────
-const allowedOrigins = (process.env.CORS_ORIGINS || 'https://hub.collab.grouppbs.com,https://10.0.0.187,https://10.0.0.187:5173,http://10.0.0.187:5173')
+const allowedOrigins = (process.env.CORS_ORIGINS || 'http://localhost,http://127.0.0.1,http://localhost:5173,http://127.0.0.1:5173')
   .split(',')
   .map(s => s.trim());
 

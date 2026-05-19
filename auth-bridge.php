@@ -23,19 +23,19 @@ function contractosRegisterGlobalConfig(string $key, $value)
     return $value;
 }
 
-$HUB_DB_HOST     = contractosRegisterGlobalConfig('HUB_DB_HOST', getenv('HUB_DB_HOST') ?: '10.0.0.187');
+$HUB_DB_HOST     = contractosRegisterGlobalConfig('HUB_DB_HOST', getenv('HUB_DB_HOST') ?: '127.0.0.1');
 $HUB_DB_PORT     = contractosRegisterGlobalConfig('HUB_DB_PORT', getenv('HUB_DB_PORT') ?: '3306');
 $HUB_DB_USER     = contractosRegisterGlobalConfig('HUB_DB_USER', getenv('HUB_DB_USER') ?: 'root');
 $HUB_DB_PASS     = contractosRegisterGlobalConfig('HUB_DB_PASS', getenv('HUB_DB_PASS') ?: '');
 $HUB_DB_NAME     = contractosRegisterGlobalConfig('HUB_DB_NAME', getenv('HUB_DB_NAME') ?: 'pbs_hub');
 
-$APP_DB_HOST     = contractosRegisterGlobalConfig('APP_DB_HOST', getenv('APP_DB_HOST') ?: '10.0.0.187');
+$APP_DB_HOST     = contractosRegisterGlobalConfig('APP_DB_HOST', getenv('APP_DB_HOST') ?: '127.0.0.1');
 $APP_DB_PORT     = contractosRegisterGlobalConfig('APP_DB_PORT', getenv('APP_DB_PORT') ?: '3306');
 $APP_DB_USER     = contractosRegisterGlobalConfig('APP_DB_USER', getenv('APP_DB_USER') ?: 'root');
 $APP_DB_PASS     = contractosRegisterGlobalConfig('APP_DB_PASS', getenv('APP_DB_PASS') ?: '');
 $APP_DB_NAME     = contractosRegisterGlobalConfig('APP_DB_NAME', getenv('APP_DB_NAME') ?: 'performance_sales_db');
 
-$HUB_SESSION_COOKIE = contractosRegisterGlobalConfig('HUB_SESSION_COOKIE', getenv('HUB_SESSION_COOKIE') ?: 'pbs-panama-hub-session');
+$HUB_SESSION_COOKIE = contractosRegisterGlobalConfig('HUB_SESSION_COOKIE', getenv('HUB_SESSION_COOKIE') ?: 'laravel_session');
 $APP_TOKEN_COOKIE   = contractosRegisterGlobalConfig('APP_TOKEN_COOKIE', getenv('APP_TOKEN_COOKIE') ?: 'performance_sales_token');
 $TOKEN_TTL_HOURS    = contractosRegisterGlobalConfig('TOKEN_TTL_HOURS', 8);
 $TOOL_URL_PATTERN   = contractosRegisterGlobalConfig('TOOL_URL_PATTERN', getenv('TOOL_URL_PATTERN') ?: '%performance-sales%');
@@ -44,14 +44,196 @@ $EMBED_MAX_AGE_SECONDS = contractosRegisterGlobalConfig('EMBED_MAX_AGE_SECONDS',
 $APP_ALLOW_LOCAL_DEV_AUTH = contractosRegisterGlobalConfig('APP_ALLOW_LOCAL_DEV_AUTH', getenv('APP_ALLOW_LOCAL_DEV_AUTH') ?: '0');
 $UPLOAD_ADMIN_EMAILS = contractosRegisterGlobalConfig(
     'UPLOAD_ADMIN_EMAILS',
-    getenv('PERFORMANCE_SALES_UPLOAD_ADMIN_EMAILS') ?: 'helpdeskpanama@pbs.group,luis.alegria@pbs.group'
+    getenv('PERFORMANCE_SALES_UPLOAD_ADMIN_EMAILS') ?: ''
 );
+
+function contractosTrustedLocalIps(): array
+{
+    $configured = getenv('APP_TRUSTED_LOCAL_IPS') ?: '127.0.0.1,::1,::ffff:127.0.0.1';
+
+    return array_values(array_filter(array_map(
+        static fn ($value): string => trim((string) $value),
+        explode(',', $configured)
+    )));
+}
 
 function contractosCookieSameSite(): string
 {
     $secure = isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off';
 
     return $secure ? 'None' : 'Lax';
+}
+
+function buildAuthCookieOptions(int $expiresTs): array
+{
+    $secure = isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off';
+
+    return [
+        'expires' => $expiresTs,
+        'path' => '/',
+        'httponly' => true,
+        'samesite' => contractosCookieSameSite(),
+        'secure' => $secure,
+    ];
+}
+
+function syncPhpSessionAuthState(array $userData, ?int $expiresTs = null): int
+{
+    global $TOKEN_TTL_HOURS;
+
+    ensureSessionStarted();
+
+    if ($expiresTs === null) {
+        $expiresTs = time() + $TOKEN_TTL_HOURS * 3600;
+    }
+
+    $_SESSION['user_id'] = (int) ($userData['user_id'] ?? 0);
+    $_SESSION['user_name'] = (string) ($userData['user_name'] ?? '');
+    $_SESSION['user_email'] = (string) ($userData['user_email'] ?? '');
+    $_SESSION['user_roles'] = array_values($userData['user_roles'] ?? []);
+    $_SESSION['can_upload_reports'] = !empty($userData['can_upload_reports']);
+    $_SESSION['expires_at'] = $expiresTs;
+
+    if (session_status() === PHP_SESSION_ACTIVE && session_id() !== '') {
+        setcookie(session_name(), session_id(), buildAuthCookieOptions($expiresTs));
+    }
+
+    return $expiresTs;
+}
+
+function getAppTokenTtlSeconds(): int
+{
+    global $TOKEN_TTL_HOURS;
+
+    return max(300, (int) $TOKEN_TTL_HOURS * 3600);
+}
+
+function getAppTokenRefreshWindowSeconds(): int
+{
+    $ttlSeconds = getAppTokenTtlSeconds();
+
+    return max(300, min($ttlSeconds, 3600));
+}
+
+function trackAppTokenExpiry(int $expiresTs): void
+{
+    ensureSessionStarted();
+    $_SESSION['app_token_expires_at'] = $expiresTs;
+}
+
+function getTrackedAppTokenExpiry(): int
+{
+    $trackedExpiry = $_SESSION['app_token_expires_at'] ?? 0;
+
+    return is_numeric($trackedExpiry) ? (int) $trackedExpiry : 0;
+}
+
+function parseDateTimeToTimestamp($value): int
+{
+    if ($value instanceof DateTimeInterface) {
+        return $value->getTimestamp();
+    }
+
+    if (!is_string($value) || trim($value) === '') {
+        return 0;
+    }
+
+    $timestamp = strtotime($value);
+
+    return $timestamp === false ? 0 : $timestamp;
+}
+
+function shouldRefreshAppToken(bool $forceRefresh): bool
+{
+    global $APP_TOKEN_COOKIE;
+
+    if ($forceRefresh) {
+        return true;
+    }
+
+    $token = $_COOKIE[$APP_TOKEN_COOKIE] ?? '';
+
+    if (!is_string($token) || preg_match('/^[0-9a-f]{64}$/', $token) !== 1) {
+        return true;
+    }
+
+    $trackedExpiresTs = getTrackedAppTokenExpiry();
+    if ($trackedExpiresTs <= time()) {
+        return true;
+    }
+
+    return ($trackedExpiresTs - time()) <= getAppTokenRefreshWindowSeconds();
+}
+
+function refreshAppToken(array $userData, ?PDO $appDb = null, ?int $expiresTs = null): void
+{
+    global $APP_DB_HOST, $APP_DB_PORT, $APP_DB_USER, $APP_DB_PASS, $APP_DB_NAME, $APP_TOKEN_COOKIE, $TOKEN_TTL_HOURS;
+
+    if ($expiresTs === null) {
+        $expiresTs = time() + $TOKEN_TTL_HOURS * 3600;
+    }
+
+    if (!$appDb) {
+        $appDb = connectDB($APP_DB_HOST, $APP_DB_PORT, $APP_DB_USER, $APP_DB_PASS, $APP_DB_NAME);
+    }
+
+    if (!$appDb) {
+        return;
+    }
+
+    $token = null;
+    $cookieToken = $_COOKIE[$APP_TOKEN_COOKIE] ?? '';
+    if (is_string($cookieToken) && preg_match('/^[0-9a-f]{64}$/', $cookieToken) === 1) {
+        $token = $cookieToken;
+    }
+
+    $expiresAt = date('Y-m-d H:i:s', $expiresTs);
+    $rolesJson = json_encode(array_values($userData['user_roles'] ?? []), JSON_UNESCAPED_SLASHES);
+    $canUploadReports = !empty($userData['can_upload_reports']) ? 1 : 0;
+
+    if ($token !== null) {
+        $stmt = $appDb->prepare(
+            'UPDATE contractos_sessions
+                SET user_id = ?, user_name = ?, user_email = ?, user_roles_json = ?, can_upload_reports = ?, expires_at = ?
+              WHERE token = ?'
+        );
+
+        $stmt->execute([
+            (int) ($userData['user_id'] ?? 0),
+            (string) ($userData['user_name'] ?? ''),
+            (string) ($userData['user_email'] ?? ''),
+            $rolesJson,
+            $canUploadReports,
+            $expiresAt,
+            $token,
+        ]);
+
+        if ($stmt->rowCount() === 0) {
+            $token = null;
+        }
+    }
+
+    if ($token === null) {
+        $token = bin2hex(random_bytes(32));
+        $stmt = $appDb->prepare(
+            'INSERT INTO contractos_sessions (token, user_id, user_name, user_email, user_roles_json, can_upload_reports, expires_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)'
+        );
+
+        $stmt->execute([
+            $token,
+            (int) ($userData['user_id'] ?? 0),
+            (string) ($userData['user_name'] ?? ''),
+            (string) ($userData['user_email'] ?? ''),
+            $rolesJson,
+            $canUploadReports,
+            $expiresAt,
+        ]);
+    }
+
+    trackAppTokenExpiry($expiresTs);
+    setcookie($APP_TOKEN_COOKIE, $token, buildAuthCookieOptions($expiresTs));
+    $_COOKIE[$APP_TOKEN_COOKIE] = $token;
 }
 
 /**
@@ -65,18 +247,18 @@ function contractosCookieSameSite(): string
  */
 function ensureSessionStarted(): void
 {
-    global $TOKEN_TTL_HOURS;
-
     if (session_status() !== PHP_SESSION_NONE) {
         return; // Already started – nothing to do
     }
 
+    $ttlSeconds = getAppTokenTtlSeconds();
     $secure = isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off';
     $sameSite = contractosCookieSameSite();
 
+    ini_set('session.gc_maxlifetime', (string) $ttlSeconds);
     session_name('performance_sales_session');
     session_set_cookie_params([
-        'lifetime' => $TOKEN_TTL_HOURS * 3600,
+        'lifetime' => $ttlSeconds,
         'path'     => '/',
         'httponly' => true,
         'samesite' => $sameSite,
@@ -85,7 +267,7 @@ function ensureSessionStarted(): void
     session_start();
 }
 
-function validateHubAccess(): ?array
+function validateHubAccess(bool $forceRefresh = false): ?array
 {
     global $HUB_DB_HOST, $HUB_DB_PORT, $HUB_DB_USER, $HUB_DB_PASS, $HUB_DB_NAME;
     global $APP_DB_HOST, $APP_DB_PORT, $APP_DB_USER, $APP_DB_PASS, $APP_DB_NAME;
@@ -94,21 +276,22 @@ function validateHubAccess(): ?array
     // 1a. PHP session fast-path (works even without contractos_db)
     ensureSessionStarted();
 
-    if ($APP_ALLOW_LOCAL_DEV_AUTH === '1' && in_array($_SERVER['REMOTE_ADDR'] ?? '', ['::1', '10.0.0.187', '::ffff:10.0.0.187'], true)) {
-        $_SESSION['user_id'] = 1;
-        $_SESSION['user_name'] = 'Local Performance Sales Admin';
-        $_SESSION['user_email'] = 'local@performance-sales.test';
-        $_SESSION['user_roles'] = ['super_admin'];
-        $_SESSION['can_upload_reports'] = true;
-        $_SESSION['expires_at'] = time() + $TOKEN_TTL_HOURS * 3600;
-
-        return [
+    if ($APP_ALLOW_LOCAL_DEV_AUTH === '1' && in_array($_SERVER['REMOTE_ADDR'] ?? '', contractosTrustedLocalIps(), true)) {
+        $userData = [
             'user_id' => 1,
             'user_name' => 'Local Performance Sales Admin',
             'user_email' => 'local@performance-sales.test',
             'user_roles' => ['super_admin'],
             'can_upload_reports' => true,
         ];
+
+        $expiresTs = syncPhpSessionAuthState($userData);
+
+        if (shouldRefreshAppToken($forceRefresh)) {
+            refreshAppToken($userData, null, $expiresTs);
+        }
+
+        return $userData;
     }
 
     if (!empty($_SESSION['user_id']) && !empty($_SESSION['expires_at']) && $_SESSION['expires_at'] > time()) {
@@ -125,8 +308,11 @@ function validateHubAccess(): ?array
             $userData = resolveUserAccessMetadata($hubDb, $userData);
         }
 
-        $_SESSION['user_roles'] = $userData['user_roles'];
-        $_SESSION['can_upload_reports'] = $userData['can_upload_reports'];
+        $expiresTs = syncPhpSessionAuthState($userData);
+
+        if (shouldRefreshAppToken($forceRefresh)) {
+            refreshAppToken($userData, null, $expiresTs);
+        }
 
         return $userData;
     }
@@ -138,12 +324,14 @@ function validateHubAccess(): ?array
             $appDb = connectDB($APP_DB_HOST, $APP_DB_PORT, $APP_DB_USER, $APP_DB_PASS, $APP_DB_NAME);
             if ($appDb) {
                 $stmt = $appDb->prepare(
-                    'SELECT user_id, user_name, user_email, user_roles_json, can_upload_reports FROM contractos_sessions
+                    'SELECT user_id, user_name, user_email, user_roles_json, can_upload_reports, expires_at FROM contractos_sessions
                       WHERE token = ? AND expires_at > NOW() LIMIT 1'
                 );
                 $stmt->execute([$token]);
                 $row = $stmt->fetch(PDO::FETCH_ASSOC);
                 if ($row) {
+                    trackAppTokenExpiry(parseDateTimeToTimestamp($row['expires_at'] ?? null));
+
                     $userData = resolveUserAccessMetadata(null, [
                         'user_id' => (int) $row['user_id'],
                         'user_name' => $row['user_name'],
@@ -158,12 +346,11 @@ function validateHubAccess(): ?array
                         persistSessionAccessMetadata($appDb, $token, $userData);
                     }
 
-                    $_SESSION['user_id'] = $userData['user_id'];
-                    $_SESSION['user_name'] = $userData['user_name'];
-                    $_SESSION['user_email'] = $userData['user_email'];
-                    $_SESSION['user_roles'] = $userData['user_roles'];
-                    $_SESSION['can_upload_reports'] = $userData['can_upload_reports'];
-                    $_SESSION['expires_at'] = time() + $TOKEN_TTL_HOURS * 3600;
+                    $expiresTs = syncPhpSessionAuthState($userData);
+
+                    if (shouldRefreshAppToken($forceRefresh)) {
+                        refreshAppToken($userData, $appDb, $expiresTs);
+                    }
 
                     return $userData;
                 }
@@ -263,49 +450,10 @@ function validateHubAccess(): ?array
         'user_name'  => $userName,
         'user_email' => $user['email'],
     ]);
-    $secure = isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off';
-    $sameSite = contractosCookieSameSite();
-
-    // Always store in PHP session so subsequent same-request and AJAX calls can
-    // use the fast-path without re-querying the Hub DB every time.
-    $_SESSION['user_id']    = $userId;
-    $_SESSION['user_name']  = $userName;
-    $_SESSION['user_email'] = $user['email'];
-    $_SESSION['user_roles'] = $userData['user_roles'];
-    $_SESSION['can_upload_reports'] = $userData['can_upload_reports'];
-    $_SESSION['expires_at'] = $expiresTs;
+    syncPhpSessionAuthState($userData, $expiresTs);
 
     $appDb = connectDB($APP_DB_HOST, $APP_DB_PORT, $APP_DB_USER, $APP_DB_PASS, $APP_DB_NAME);
-    if ($appDb) {
-        $token   = bin2hex(random_bytes(32)); // 64 char hex
-        $expires = date('Y-m-d H:i:s', $expiresTs);
-        $stmt    = $appDb->prepare(
-            'INSERT INTO contractos_sessions (token, user_id, user_name, user_email, user_roles_json, can_upload_reports, expires_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)'
-        );
-        $stmt->execute([
-            $token,
-            $userId,
-            $userName,
-            $user['email'],
-            json_encode($userData['user_roles'], JSON_UNESCAPED_SLASHES),
-            $userData['can_upload_reports'] ? 1 : 0,
-            $expires,
-        ]);
-
-        setcookie(
-            $APP_TOKEN_COOKIE,
-            $token,
-            [
-                'expires'  => $expiresTs,
-                'path'     => '/',         // cover all paths
-                'httponly' => true,
-                'samesite' => $sameSite,
-                'secure'   => $secure,
-            ]
-        );
-        $_COOKIE[$APP_TOKEN_COOKIE] = $token;
-    }
+    refreshAppToken($userData, $appDb, $expiresTs);
 
     return $userData;
 }
@@ -527,10 +675,8 @@ function getHubSessionCookieValue(?string $preferredCookie): ?string
     $candidates = array_values(array_unique(array_filter([
         $preferredCookie,
         'PHPSESSID',
-        'pbs_panama_hub_session', // Laravel default for APP_NAME="PBS Panama Hub"
-        'pbs-panama-hub-session',
         'laravel_session',
-        'pbs_hub_session',
+        'hub_session',
     ])));
 
     $appKey = getenv('HUB_APP_KEY') ?: '';

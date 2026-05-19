@@ -24,11 +24,11 @@ export default defineConfig({
     },
   },
   server: {
-    host: '10.0.0.187',
+    host: process.env.VITE_HOST || '0.0.0.0',
     port: 5173,
     proxy: {
       '/performance-sales/api': {
-        target:      'http://10.0.0.187:3003',
+        target:      process.env.VITE_API_PROXY_TARGET || 'http://127.0.0.1:3003',
         changeOrigin: true,
       },
     },

@@ -4,6 +4,8 @@ backend/node_modules/
 frontend/node_modules/
 uploads/
 config.php
+public/index.html
+public/assets/
 
 *.log
 npm-debug.log*
