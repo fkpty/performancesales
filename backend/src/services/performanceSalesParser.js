@@ -4,7 +4,7 @@ const { parseExcelDate } = require('../utils/dateUtils');
 
 const HEADER_SCAN_LIMIT = 5;
 
-const FIELD_DEFINITIONS = {
+const STANDARD_FIELD_DEFINITIONS = {
   order_number: { label: 'ORDEN', aliases: ['orden'] },
   account_code: { label: 'CUENTA', aliases: ['cuenta'] },
   client_name: { label: 'NOMBRE DEL CLIENTE', aliases: ['nombre_del_cliente', 'nombre_cliente', 'cliente'], required: true },
@@ -32,7 +32,48 @@ const FIELD_DEFINITIONS = {
   fiscal_sequence: { label: 'SECUENCIAL_FISCAL', aliases: ['secuencial_fiscal'] },
 };
 
-const HEADER_SIGNALS = ['orden', 'cuenta', 'nombre_del_cliente', 'revenue', 'fecha', 'serie'];
+const POSTSALES_FIELD_DEFINITIONS = {
+  order_number: { label: 'Order', aliases: ['order', 'order_number', 'orden'] },
+  account_code: { label: 'Account', aliases: ['account', 'account_code', 'account code', 'cuenta'] },
+  client_name: { label: 'Customer', aliases: ['customer', 'customer_name', 'customer name', 'client', 'client_name', 'cliente'] },
+  item_model: { label: 'Model', aliases: ['model', 'item_model', 'mod'] },
+  configuration: { label: 'Configuration', aliases: ['configuration', 'configuracion', 'conf'] },
+  quantity: { label: 'Quantity', aliases: ['quantity', 'qty', 'cantidad', 'cant'] },
+  revenue: { label: 'Total Corp Price', aliases: ['total_corp_price', 'total corp price'], required: true },
+  total_cost: { label: 'Total Corp Cost', aliases: ['total_corp_cost', 'total corp cost'], required: true },
+  gross_profit: { label: 'YTD Profit', aliases: ['ytd_profit', 'ytd profit', 'profit'] },
+  sale_date: { label: 'Docdate', aliases: ['docdate', 'doc date'], required: true },
+  invoice_number: { label: 'Invoice', aliases: ['invoice', 'invoice_number', 'invoice number', 'factura'] },
+  sales_person_name: { label: 'Employee Name', aliases: ['employee_name', 'employee name', 'sales_person_name', 'sales person name', 'seller_name', 'seller name', 'nombre'] },
+  employee_id: { label: 'Employee Code', aliases: ['employee_code', 'employee code'], required: true },
+  document_type: { label: 'Document Type', aliases: ['document_type', 'document type', 'doc_type', 'doc'] },
+  business_unit: { label: 'Business Unit', aliases: ['business_unit', 'business unit', 'business', 'negocio', 'neg'] },
+  sales_mode: { label: 'Mode', aliases: ['sales_mode', 'sales mode', 'mode', 'mod'] },
+  operation_type: { label: 'Operation', aliases: ['operation_type', 'operation type', 'oper'] },
+  serial_number: { label: 'Serial', aliases: ['serial', 'serial_number', 'serial number', 'serie'] },
+  fiscal_sequence: { label: 'Fiscal Sequence', aliases: ['fiscal_sequence', 'fiscal sequence', 'secuencial_fiscal'] },
+};
+
+const STANDARD_HEADER_SIGNALS = ['orden', 'cuenta', 'nombre_del_cliente', 'revenue', 'fecha', 'serie'];
+const POSTSALES_HEADER_SIGNALS = ['employee_code', 'docdate', 'total_corp_price', 'total_corp_cost'];
+
+const REPORT_LAYOUTS = {
+  xerox: {
+    fieldDefinitions: STANDARD_FIELD_DEFINITIONS,
+    headerSignals: STANDARD_HEADER_SIGNALS,
+    mapRow: mapStandardReportRow,
+  },
+  it: {
+    fieldDefinitions: STANDARD_FIELD_DEFINITIONS,
+    headerSignals: STANDARD_HEADER_SIGNALS,
+    mapRow: mapStandardReportRow,
+  },
+  postventas: {
+    fieldDefinitions: POSTSALES_FIELD_DEFINITIONS,
+    headerSignals: POSTSALES_HEADER_SIGNALS,
+    mapRow: mapPostSalesReportRow,
+  },
+};
 
 const MONTH_NAMES = {
   enero: 1,
@@ -52,14 +93,15 @@ const MONTH_NAMES = {
 
 async function parsePerformanceWorkbook(filePath, originalName = '', reportType = '') {
   const normalizedType = normalizeReportType(reportType);
+  const reportLayout = normalizedType ? REPORT_LAYOUTS[normalizedType] : null;
 
-  if (!normalizedType) {
+  if (!normalizedType || !reportLayout) {
     return {
       reportType: null,
       reportMonth: null,
       sheetName: '',
       records: [],
-      errors: ['Tipo de reporte no soportado. Usa Xerox o IT.'],
+      errors: ['Tipo de reporte no soportado. Usa Xerox, IT o Post Ventas.'],
     };
   }
 
@@ -92,7 +134,7 @@ async function parsePerformanceWorkbook(filePath, originalName = '', reportType 
     };
   }
 
-  const headerRowNumber = findHeaderRowNumber(sheet);
+  const headerRowNumber = findHeaderRowNumber(sheet, reportLayout.headerSignals);
   if (!headerRowNumber) {
     return {
       reportType: normalizedType,
@@ -103,7 +145,10 @@ async function parsePerformanceWorkbook(filePath, originalName = '', reportType 
     };
   }
 
-  const { fieldMap, maxColumn, errors: headerErrors } = buildFieldMap(sheet.getRow(headerRowNumber));
+  const { fieldMap, maxColumn, errors: headerErrors } = buildFieldMap(
+    sheet.getRow(headerRowNumber),
+    reportLayout.fieldDefinitions
+  );
   if (headerErrors.length > 0) {
     return {
       reportType: normalizedType,
@@ -126,7 +171,7 @@ async function parsePerformanceWorkbook(filePath, originalName = '', reportType 
       return;
     }
 
-    const mapped = mapReportRow(row, rowNumber, normalizedType, fieldMap, maxColumn, errors);
+    const mapped = reportLayout.mapRow(row, rowNumber, normalizedType, fieldMap, maxColumn, errors);
     if (mapped) {
       records.push(mapped);
     }
@@ -134,10 +179,14 @@ async function parsePerformanceWorkbook(filePath, originalName = '', reportType 
 
   const reportMonth = resolveReportMonth(records, originalName || path.basename(filePath));
   if (!reportMonth) {
-    errors.push('No se pudo determinar el mes del reporte. Verifica la columna FECHA o el nombre del archivo.');
+    errors.push('No se pudo determinar el mes del reporte. Verifica la columna de fecha del archivo o el nombre del archivo.');
   }
 
-  if (reportMonth) {
+  if (normalizedType === 'postventas') {
+    records.forEach(record => {
+      record.report_month = buildMonthStart(record.sale_date) || reportMonth;
+    });
+  } else if (reportMonth) {
     records.forEach(record => {
       record.report_month = reportMonth;
     });
@@ -152,27 +201,28 @@ async function parsePerformanceWorkbook(filePath, originalName = '', reportType 
   };
 }
 
-function findHeaderRowNumber(sheet) {
+function findHeaderRowNumber(sheet, headerSignals = []) {
   let bestMatch = { rowNumber: 0, score: 0 };
+  const minimumScore = Math.max(2, Math.min(headerSignals.length || 0, 4));
 
   for (let rowNumber = 1; rowNumber <= Math.min(sheet.rowCount, HEADER_SCAN_LIMIT); rowNumber += 1) {
     const { headerIndexes } = buildHeaderLookup(sheet.getRow(rowNumber));
-    const score = HEADER_SIGNALS.reduce((total, signal) => total + (headerIndexes.get(signal)?.length ? 1 : 0), 0);
+    const score = headerSignals.reduce((total, signal) => total + (headerIndexes.get(signal)?.length ? 1 : 0), 0);
 
     if (score > bestMatch.score) {
       bestMatch = { rowNumber, score };
     }
   }
 
-  return bestMatch.score >= 4 ? bestMatch.rowNumber : 0;
+  return bestMatch.score >= minimumScore ? bestMatch.rowNumber : 0;
 }
 
-function buildFieldMap(headerRow) {
+function buildFieldMap(headerRow, fieldDefinitions) {
   const { headerIndexes, maxColumn } = buildHeaderLookup(headerRow);
   const fieldMap = {};
   const missing = [];
 
-  for (const [fieldName, definition] of Object.entries(FIELD_DEFINITIONS)) {
+  for (const [fieldName, definition] of Object.entries(fieldDefinitions)) {
     const index = resolveFieldIndex(headerIndexes, definition.aliases, definition.occurrence || 0);
     fieldMap[fieldName] = index;
 
@@ -225,7 +275,7 @@ function resolveFieldIndex(headerIndexes, aliases, occurrence = 0) {
   return null;
 }
 
-function mapReportRow(row, rowNumber, reportType, fieldMap, maxColumn, errors) {
+function mapStandardReportRow(row, rowNumber, reportType, fieldMap, maxColumn, errors) {
   const saleDate = parseExcelDate(readField(row, fieldMap.sale_date));
   const revenue = parseNullableNumber(readField(row, fieldMap.revenue));
   const costUsd = parseNullableNumber(readField(row, fieldMap.cost_usd));
@@ -269,10 +319,80 @@ function mapReportRow(row, rowNumber, reportType, fieldMap, maxColumn, errors) {
     sale_date: saleDate,
     invoice_number: invoiceNumber,
     sales_person_name: normalizeText(readField(row, fieldMap.sales_person_name)),
+    employee_id: '',
     document_type: normalizeText(readField(row, fieldMap.document_type)),
     business_unit: normalizeText(readField(row, fieldMap.business_unit)),
     sales_mode: normalizeText(readField(row, fieldMap.sales_mode)),
     operation_type: normalizeText(readField(row, fieldMap.operation_type)),
+    serial_number: serialNumber,
+    fiscal_sequence: normalizeText(readField(row, fieldMap.fiscal_sequence)),
+    report_type: reportType,
+    raw_payload: buildRawPayload(row, maxColumn),
+  };
+}
+
+function mapPostSalesReportRow(row, rowNumber, reportType, fieldMap, maxColumn, errors) {
+  const employeeId = normalizeText(readDisplayField(row, fieldMap.employee_id));
+  const saleDate = parseExcelDate(readField(row, fieldMap.sale_date));
+  const revenue = parseNullableNumber(readField(row, fieldMap.revenue));
+  const totalCost = parseNullableNumber(readField(row, fieldMap.total_cost));
+  const grossProfitFromFile = parseNullableNumber(readField(row, fieldMap.gross_profit));
+  const grossProfit = grossProfitFromFile ?? computeGrossProfit(revenue, totalCost);
+  const margin = normalizeMargin(computeMargin(grossProfit, revenue));
+  const salesPersonName = normalizeText(readField(row, fieldMap.sales_person_name));
+  const clientName = normalizeText(readField(row, fieldMap.client_name));
+  const invoiceNumber = normalizeText(readField(row, fieldMap.invoice_number));
+  const serialNumber = normalizeText(readField(row, fieldMap.serial_number));
+
+  if (!employeeId && !salesPersonName && !clientName && !invoiceNumber && !serialNumber && revenue == null && totalCost == null) {
+    return null;
+  }
+
+  if (!employeeId) {
+    errors.push(`Fila ${rowNumber}: falta Employee Code.`);
+    return null;
+  }
+
+  if (!saleDate) {
+    errors.push(`Fila ${rowNumber}: Docdate no es valido.`);
+    return null;
+  }
+
+  if (revenue == null) {
+    errors.push(`Fila ${rowNumber}: Total Corp Price no es valido.`);
+    return null;
+  }
+
+  if (totalCost == null) {
+    errors.push(`Fila ${rowNumber}: Total Corp Cost no es valido.`);
+    return null;
+  }
+
+  return {
+    order_number: parseNullableInteger(readField(row, fieldMap.order_number)),
+    account_code: normalizeText(readField(row, fieldMap.account_code)),
+    client_name: clientName,
+    item_model: normalizeText(readField(row, fieldMap.item_model)),
+    configuration: normalizeText(readField(row, fieldMap.configuration)),
+    quantity: parseNullableNumber(readField(row, fieldMap.quantity)),
+    revenue,
+    cost_usd: totalCost,
+    itbm: null,
+    acarreo: null,
+    reacondicionamiento: null,
+    garantia: null,
+    provision: null,
+    total_cost: totalCost,
+    gross_profit: grossProfit,
+    margin,
+    sale_date: saleDate,
+    invoice_number: invoiceNumber,
+    sales_person_name: salesPersonName || employeeId,
+    employee_id: employeeId,
+    document_type: normalizeText(readField(row, fieldMap.document_type)),
+    business_unit: normalizeText(readField(row, fieldMap.business_unit)) || 'Post Ventas',
+    sales_mode: normalizeText(readField(row, fieldMap.sales_mode)),
+    operation_type: normalizeText(readField(row, fieldMap.operation_type)) || 'Post Venta',
     serial_number: serialNumber,
     fiscal_sequence: normalizeText(readField(row, fieldMap.fiscal_sequence)),
     report_type: reportType,
@@ -286,6 +406,14 @@ function readField(row, columnIndex) {
   }
 
   return readCell(row, columnIndex);
+}
+
+function readDisplayField(row, columnIndex) {
+  if (!columnIndex) {
+    return null;
+  }
+
+  return readCellDisplayText(row, columnIndex);
 }
 
 function buildRawPayload(row, maxColumn) {
@@ -327,6 +455,36 @@ function readCell(row, index) {
   }
 
   return value;
+}
+
+function readCellDisplayText(row, index) {
+  const cell = row.getCell(index);
+  if (!cell) {
+    return null;
+  }
+
+  const zeroPaddedNumericText = formatZeroPaddedNumericCell(cell);
+  if (zeroPaddedNumericText) {
+    return zeroPaddedNumericText;
+  }
+
+  const text = String(cell.text || '').trim();
+  if (text !== '') {
+    return text;
+  }
+
+  return readCell(row, index);
+}
+
+function formatZeroPaddedNumericCell(cell) {
+  const numericValue = cell?.value;
+  const numFmt = String(cell?.numFmt || cell?.style?.numFmt || '').trim();
+
+  if (!Number.isInteger(numericValue) || !/^0+$/.test(numFmt)) {
+    return '';
+  }
+
+  return String(numericValue).padStart(numFmt.length, '0');
 }
 
 function isEmptyRow(row, maxColumns) {
@@ -437,6 +595,11 @@ function resolveReportMonth(records, originalName) {
   return null;
 }
 
+function buildMonthStart(value) {
+  const normalized = String(value || '').match(/^\d{4}-\d{2}/)?.[0];
+  return normalized ? `${normalized}-01` : null;
+}
+
 function parseMonthFromFilename(fileName) {
   const normalized = String(fileName || '')
     .normalize('NFD')
@@ -461,7 +624,7 @@ function parseMonthFromFilename(fileName) {
 
 function normalizeReportType(reportType) {
   const value = String(reportType || '').trim().toLowerCase();
-  return value === 'it' || value === 'xerox' ? value : null;
+  return value === 'it' || value === 'xerox' || value === 'postventas' ? value : null;
 }
 
 module.exports = {

@@ -10,13 +10,32 @@ const today = new Date();
 const currentYear = today.getFullYear();
 const currentMonth = today.getMonth() + 1;
 const currentQuarter = Math.ceil(currentMonth / 3);
+const DEFAULT_REPORT_TYPES = ['xerox', 'it', 'postventas'];
+const REPORT_SCOPE_TYPES = {
+  dashboard: ['xerox', 'it'],
+  postventas: ['postventas'],
+};
 
 function hasUploadRole(user) {
   const roles = Array.isArray(user?.roles) ? user.roles : [];
   return roles.some((role) => ['admin', 'super_admin'].includes(String(role).toLowerCase()));
 }
 
-function buildDateParams(state) {
+function resolveCanUploadReports(user, accessContext) {
+  const basePermission = Boolean(
+    user?.can_upload_reports ||
+    user?.canUploadReports ||
+    hasUploadRole(user)
+  );
+
+  if (accessContext?.navigation && typeof accessContext.navigation.can_upload_reports === 'boolean') {
+    return basePermission && accessContext.navigation.can_upload_reports;
+  }
+
+  return basePermission;
+}
+
+export function buildDateParams(state) {
   const params = {
     period: state.period,
     year: state.year,
@@ -41,7 +60,35 @@ function buildDateParams(state) {
 function buildBaseParams(state) {
   return {
     ...buildDateParams(state),
+    ...buildScopeParams(state),
     ...state.filters,
+  };
+}
+
+function buildScopeParams(state) {
+  return state.reportScope
+    ? { scope: state.reportScope }
+    : {};
+}
+
+function normalizeReportScope(scope) {
+  const normalized = String(scope || '').trim().toLowerCase();
+  return Object.prototype.hasOwnProperty.call(REPORT_SCOPE_TYPES, normalized) ? normalized : '';
+}
+
+function resolveReportTypesForScope(scope) {
+  return REPORT_SCOPE_TYPES[normalizeReportScope(scope)] || DEFAULT_REPORT_TYPES;
+}
+
+function normalizeFiltersForScope(filters, scope) {
+  const allowedReportTypes = resolveReportTypesForScope(scope);
+  if (!filters.reportType || allowedReportTypes.includes(filters.reportType)) {
+    return filters;
+  }
+
+  return {
+    ...filters,
+    reportType: '',
   };
 }
 
@@ -76,6 +123,7 @@ const usePerformanceStore = create((set, get) => ({
   authUser: null,
   accessContext: null,
   canUploadReports: false,
+  reportScope: 'dashboard',
 
   year: currentYear,
   period: 'anual',
@@ -102,7 +150,7 @@ const usePerformanceStore = create((set, get) => ({
     clients: [],
     owners: [],
     businesses: [],
-    reportTypes: ['xerox', 'it'],
+    reportTypes: resolveReportTypesForScope('dashboard'),
   },
   availableYears: [],
 
@@ -112,17 +160,52 @@ const usePerformanceStore = create((set, get) => ({
     const normalizedUser = user && typeof user === 'object' ? user : null;
     set({
       authUser: normalizedUser,
-      canUploadReports: Boolean(
-        normalizedUser?.can_upload_reports ||
-        normalizedUser?.canUploadReports ||
-        hasUploadRole(normalizedUser)
-      ),
+      canUploadReports: resolveCanUploadReports(normalizedUser, get().accessContext),
     });
   },
 
   setAccessContext: (accessContext) => {
+    const normalizedAccessContext = accessContext && typeof accessContext === 'object' ? accessContext : null;
     set({
-      accessContext: accessContext && typeof accessContext === 'object' ? accessContext : null,
+      accessContext: normalizedAccessContext,
+      canUploadReports: resolveCanUploadReports(get().authUser, normalizedAccessContext),
+    });
+  },
+
+  setReportScope: (scope) => {
+    const normalizedScope = normalizeReportScope(scope);
+
+    set((state) => {
+      const nextFilters = normalizeFiltersForScope(state.filters, normalizedScope);
+
+      return {
+        reportScope: normalizedScope,
+        filters: nextFilters,
+        overview: null,
+        overviewError: null,
+        rows: {
+          ...state.rows,
+          data: [],
+          total: 0,
+          page: 1,
+          totalPages: 1,
+          error: null,
+        },
+        uploads: {
+          ...state.uploads,
+          data: [],
+          total: 0,
+          page: 1,
+          totalPages: 1,
+          error: null,
+        },
+        filterOptions: {
+          clients: [],
+          owners: [],
+          businesses: [],
+          reportTypes: resolveReportTypesForScope(normalizedScope),
+        },
+      };
     });
   },
 
@@ -235,6 +318,14 @@ const usePerformanceStore = create((set, get) => ({
     get().loadFilterOptions(nextRequestId);
   },
 
+  loadDashboard: () => {
+    const nextRequestId = get().requestId + 1;
+    set({ requestId: nextRequestId });
+    get().loadOverview(nextRequestId);
+    get().loadUploads(nextRequestId);
+    get().loadFilterOptions(nextRequestId);
+  },
+
   refreshAll: () => {
     get().loadAll();
   },
@@ -290,6 +381,7 @@ const usePerformanceStore = create((set, get) => ({
       const uploadsState = get().uploads;
       const response = await fetchUploadHistory({
         ...buildDateParams(get()),
+        ...buildScopeParams(get()),
         reportType: get().filters.reportType,
         page: uploadsState.page,
         limit: uploadsState.limit,
@@ -319,6 +411,7 @@ const usePerformanceStore = create((set, get) => ({
     try {
       const response = await fetchPerformanceFilters({
         ...buildDateParams(get()),
+        ...buildScopeParams(get()),
         reportType: get().filters.reportType,
       });
       if (requestId !== get().requestId) return;
@@ -327,7 +420,7 @@ const usePerformanceStore = create((set, get) => ({
           clients: response.clients || [],
           owners: response.owners || [],
           businesses: response.businesses || [],
-          reportTypes: response.reportTypes || ['xerox', 'it'],
+          reportTypes: response.reportTypes || DEFAULT_REPORT_TYPES,
         },
         availableYears: response.years || [],
       });

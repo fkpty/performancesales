@@ -2,14 +2,17 @@ import { useEffect, useState } from 'react';
 import { HashRouter, Navigate, Route, Routes } from 'react-router-dom';
 import Layout        from './components/layout/Layout';
 import DashboardPage from './pages/DashboardPage';
+import PostSalesDashboardPage from './pages/PostSalesDashboardPage';
 import EfficiencyPage from './pages/EfficiencyPage';
 import EfficiencyConfigPage from './pages/EfficiencyConfigPage';
 import ReportsPage   from './pages/ReportsPage';
 import UploadsPage   from './pages/UploadsPage';
 import SettingsPage  from './pages/SettingsPage';
 import { fetchEfficiencyAccess, initAuthSession } from './services/api';
-import usePerformanceStore from './store/performanceStore';
+import usePerformanceStore, { buildDateParams } from './store/performanceStore';
 import { canAccessRoute, getDefaultRoute } from './utils/access';
+
+const STARTUP_RETRY_DELAYS_MS = [800, 1600, 2400];
 
 function getBootstrapAuthUser() {
   if (typeof window === 'undefined') {
@@ -27,14 +30,18 @@ function getBootstrapAuthUser() {
 export default function App() {
   const [authReady, setAuthReady] = useState(false);
   const [accessReady, setAccessReady] = useState(false);
-  const [authError, setAuthError] = useState('');
-  const [accessError, setAccessError] = useState('');
+  const [authError, setAuthError] = useState(null);
+  const [accessError, setAccessError] = useState(null);
   const setAuthUser = usePerformanceStore(s => s.setAuthUser);
   const setAccessContext = usePerformanceStore(s => s.setAccessContext);
   const authUser = usePerformanceStore(s => s.authUser);
   const accessContext = usePerformanceStore(s => s.accessContext);
   const year = usePerformanceStore(s => s.year);
+  const period = usePerformanceStore(s => s.period);
   const month = usePerformanceStore(s => s.month);
+  const quarter = usePerformanceStore(s => s.quarter);
+  const startDate = usePerformanceStore(s => s.startDate);
+  const endDate = usePerformanceStore(s => s.endDate);
 
   useEffect(() => {
     const bootstrapUser = getBootstrapAuthUser();
@@ -47,14 +54,14 @@ export default function App() {
           return;
         }
 
-        const response = await initAuthSession();
+        const response = await retryStartupRequest(() => initAuthSession());
         if (active) {
           setAuthUser(response?.user || null);
         }
-      } catch {
+      } catch (error) {
         if (active) {
           setAuthUser(null);
-          setAuthError('No se pudo validar la sesión de PBS Hub para Performance Sales.');
+          setAuthError(buildAuthErrorState(error));
         }
       } finally {
         if (active) {
@@ -77,9 +84,9 @@ export default function App() {
 
     let active = true;
     setAccessReady(false);
-    setAccessError('');
+    setAccessError(null);
 
-    fetchEfficiencyAccess({ year, month })
+    retryStartupRequest(() => fetchEfficiencyAccess(buildDateParams({ year, period, month, quarter, startDate, endDate })))
       .then((response) => {
         if (!active) {
           return;
@@ -91,11 +98,15 @@ export default function App() {
           return;
         }
         setAccessContext(null);
-        setAccessError(
-          error?.response?.data?.error
-          || error?.message
-          || 'No se pudieron cargar los permisos de navegación.'
-        );
+
+        if (error?.isAuthError) {
+          setAuthUser(null);
+          setAuthError(buildAuthErrorState(error));
+          setAccessError(null);
+          return;
+        }
+
+        setAccessError(buildAccessErrorState(error));
       })
       .finally(() => {
         if (active) {
@@ -106,7 +117,7 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, [authError, authReady, month, setAccessContext, year]);
+  }, [authError, authReady, endDate, month, period, quarter, setAccessContext, setAuthUser, startDate, year]);
 
   if (!authReady || !accessReady) {
     return (
@@ -128,9 +139,9 @@ export default function App() {
         <div className="max-w-xl bg-error-container border border-red-200 rounded-2xl shadow-sm px-xl py-lg space-y-sm">
           <div className="flex items-center gap-sm text-on-error-container font-semibold">
             <span className="material-symbols-outlined text-error">error</span>
-            Error de autenticación
+            {authError.title}
           </div>
-          <p className="text-on-error-container">{authError}</p>
+          <p className="text-on-error-container">{authError.message}</p>
           <button
             onClick={() => window.location.reload()}
             className="px-md py-xs bg-primary-container text-on-primary rounded-lg font-body-sm hover:opacity-90 transition-opacity"
@@ -148,9 +159,9 @@ export default function App() {
         <div className="max-w-xl bg-error-container border border-red-200 rounded-2xl shadow-sm px-xl py-lg space-y-sm">
           <div className="flex items-center gap-sm text-on-error-container font-semibold">
             <span className="material-symbols-outlined text-error">error</span>
-            Error de permisos
+            {accessError.title}
           </div>
-          <p className="text-on-error-container">{accessError}</p>
+          <p className="text-on-error-container">{accessError.message}</p>
           <button
             onClick={() => window.location.reload()}
             className="px-md py-xs bg-primary-container text-on-primary rounded-lg font-body-sm hover:opacity-90 transition-opacity"
@@ -169,6 +180,7 @@ export default function App() {
       <Layout>
         <Routes>
           <Route path="/" element={<ProtectedRoute routePath="/" redirectTo={defaultRoute}><DashboardPage /></ProtectedRoute>} />
+          <Route path="/postventas" element={<ProtectedRoute routePath="/postventas" redirectTo={defaultRoute}><PostSalesDashboardPage /></ProtectedRoute>} />
           <Route path="/efficiency" element={<ProtectedRoute routePath="/efficiency" redirectTo={defaultRoute}><EfficiencyPage /></ProtectedRoute>} />
           <Route path="/efficiency-config" element={<ProtectedRoute routePath="/efficiency-config" redirectTo={defaultRoute}><EfficiencyConfigPage /></ProtectedRoute>} />
           <Route path="/reports" element={<ProtectedRoute routePath="/reports" redirectTo={defaultRoute}><ReportsPage /></ProtectedRoute>} />
@@ -190,4 +202,58 @@ function ProtectedRoute({ routePath, redirectTo, children }) {
   }
 
   return <Navigate to={redirectTo} replace />;
+}
+
+function buildAuthErrorState(error) {
+  if (error?.isAvailabilityError) {
+    return {
+      title: 'Servicio temporalmente no disponible',
+      message: error?.message || 'Performance Sales no esta disponible temporalmente.',
+    };
+  }
+
+  return {
+    title: 'Error de autenticacion',
+    message: error?.message || 'No se pudo validar la sesion de PBS Hub para Performance Sales.',
+  };
+}
+
+function buildAccessErrorState(error) {
+  if (error?.isAvailabilityError) {
+    return {
+      title: 'Servicio temporalmente no disponible',
+      message: error?.message || 'Performance Sales no esta disponible temporalmente.',
+    };
+  }
+
+  return {
+    title: 'Error de permisos',
+    message: error?.message || 'No se pudieron cargar los permisos de navegacion.',
+  };
+}
+
+async function retryStartupRequest(request) {
+  let lastError = null;
+
+  for (let attempt = 0; attempt <= STARTUP_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      return await request();
+    } catch (error) {
+      lastError = error;
+
+      if (!error?.isAvailabilityError || attempt === STARTUP_RETRY_DELAYS_MS.length) {
+        throw error;
+      }
+
+      await wait(STARTUP_RETRY_DELAYS_MS[attempt]);
+    }
+  }
+
+  throw lastError;
+}
+
+function wait(ms) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
 }

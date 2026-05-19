@@ -943,9 +943,25 @@ function resolveRiskLevel(endDate) {
   return 'MAS_DE_6_MESES';
 }
 
+const JSON_SETTING_KEYS = new Set(['full_view_access_users']);
+
 async function getAllSettings() {
   const [rows] = await pool.execute('SELECT `key`, `value` FROM app_settings');
-  return Object.fromEntries(rows.map(row => [row.key, row.value]));
+  return Object.fromEntries(rows.map(row => [row.key, parseSettingValue(row.key, row.value)]));
+}
+
+async function getSettingValue(key, fallbackValue = null) {
+  const [rows] = await pool.execute(
+    'SELECT `value` FROM app_settings WHERE `key` = ? LIMIT 1',
+    [key]
+  );
+
+  if (!rows.length) {
+    return fallbackValue;
+  }
+
+  const parsedValue = parseSettingValue(key, rows[0].value);
+  return parsedValue == null ? fallbackValue : parsedValue;
 }
 
 async function updateSettings(updates) {
@@ -954,9 +970,30 @@ async function updateSettings(updates) {
       `INSERT INTO app_settings (\`key\`, \`value\`)
        VALUES (?, ?)
        ON DUPLICATE KEY UPDATE \`value\` = VALUES(\`value\`)`,
-      [key, String(value)]
+      [key, serializeSettingValue(key, value)]
     );
   }
+}
+
+function parseSettingValue(key, value) {
+  if (!JSON_SETTING_KEYS.has(key)) {
+    return value;
+  }
+
+  try {
+    const parsedValue = JSON.parse(String(value || '[]'));
+    return Array.isArray(parsedValue) ? parsedValue : [];
+  } catch {
+    return [];
+  }
+}
+
+function serializeSettingValue(key, value) {
+  if (JSON_SETTING_KEYS.has(key)) {
+    return JSON.stringify(Array.isArray(value) ? value : []);
+  }
+
+  return String(value);
 }
 
 module.exports = {
@@ -968,6 +1005,7 @@ module.exports = {
   listCanonicalContracts,
   getCanonicalFilterOptions,
   getAllSettings,
+  getSettingValue,
   updateSettings,
   getOwnerUpcomingStats,
   getOwnerClosedStats,

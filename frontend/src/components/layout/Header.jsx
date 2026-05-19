@@ -33,6 +33,17 @@ const QUARTERS = [
   { value: 3, label: 'T3' },
   { value: 4, label: 'T4' },
 ];
+
+const HEADER_COPY = {
+  '/': 'Seguimiento mensual del panel principal con Xerox e IT.',
+  '/postventas': 'Vista dedicada para Post Ventas con tendencia, ejecutivos, clientes y cargas recientes.',
+  '/efficiency': 'Seguimiento de productividad y objetivos sobre los datos de eficiencia.',
+  '/efficiency-config': 'Administracion de grupos, periodos y metas del modulo de eficiencia.',
+  '/reports': 'Consulta detallada del snapshot activo con filtros globales, busqueda y ordenamiento.',
+  '/uploads': 'Historial de cargas y administracion de lotes importados.',
+  '/settings': 'Configuracion operativa y permisos de Performance Sales.',
+};
+
 export default function Header() {
   const location = useLocation();
   const year = usePerformanceStore(s => s.year);
@@ -55,9 +66,16 @@ export default function Header() {
   const [showFilters, setShowFilters] = useState(false);
   const canManageConfig = canManageEfficiencyConfig(authUser, accessContext);
   const efficiencyOnlyUser = isEfficiencyOnlyUser(accessContext);
-  const showEfficiencyMonthSelector = location.pathname === '/efficiency' || location.pathname === '/efficiency-config';
+  const isEfficiencyConfigPage = location.pathname === '/efficiency-config';
+  const showPeriodSelector = !isEfficiencyConfigPage;
+  const showYearSelector = isEfficiencyConfigPage || period !== 'personalizado';
+  const showMonthSelector = isEfficiencyConfigPage || period === 'mensual';
+  const showQuarterSelector = !isEfficiencyConfigPage && period === 'trimestral';
+  const showCustomRange = !isEfficiencyConfigPage && period === 'personalizado';
+  const headerSubtitle = HEADER_COPY[location.pathname] || 'Seguimiento mensual de Performance Sales.';
   const navItems = [
     { label: 'Panel', icon: 'dashboard', to: '/' },
+    { label: 'Panel Post Ventas', icon: 'support_agent', to: '/postventas' },
     { label: 'Eficiencia', icon: 'speed', to: '/efficiency' },
     ...(canManageConfig
       ? [{ label: 'Configuracion eficiencia', icon: 'tune', to: '/efficiency-config' }]
@@ -73,11 +91,11 @@ export default function Header() {
         <div className="px-lg h-16 flex items-center justify-between gap-lg">
           <div>
             <h1 className="font-h2 text-h2 text-on-surface">Performance Sales</h1>
-            <p className="text-[12px] text-on-surface-variant">Seguimiento mensual para Xerox e IT con historial por carga.</p>
+            <p className="text-[12px] text-on-surface-variant">{headerSubtitle}</p>
           </div>
 
           <div className="flex items-center gap-md flex-wrap justify-end">
-            {!efficiencyOnlyUser && (
+            {showPeriodSelector && (
               <div className="flex items-center gap-xs text-on-surface-variant font-body-sm">
                 <span className="material-symbols-outlined text-[18px]">date_range</span>
                 <select
@@ -92,7 +110,7 @@ export default function Header() {
               </div>
             )}
 
-            {(efficiencyOnlyUser || period !== 'personalizado') && (
+            {showYearSelector && (
               <>
                 <div className="h-4 w-px bg-outline-variant" />
                 <div className="flex items-center gap-xs text-on-surface-variant font-body-sm">
@@ -110,7 +128,7 @@ export default function Header() {
               </>
             )}
 
-            {(efficiencyOnlyUser || period === 'mensual' || showEfficiencyMonthSelector) && (
+            {showMonthSelector && (
               <>
                 <div className="h-4 w-px bg-outline-variant" />
                 <select
@@ -125,7 +143,7 @@ export default function Header() {
               </>
             )}
 
-            {!efficiencyOnlyUser && period === 'trimestral' && (
+            {showQuarterSelector && (
               <>
                 <div className="h-4 w-px bg-outline-variant" />
                 <select
@@ -140,7 +158,7 @@ export default function Header() {
               </>
             )}
 
-            {!efficiencyOnlyUser && period === 'personalizado' && (
+            {showCustomRange && (
               <>
                 <div className="h-4 w-px bg-outline-variant" />
                 <div className="flex items-center gap-xs text-on-surface-variant font-body-sm">
@@ -161,7 +179,7 @@ export default function Header() {
               </>
             )}
 
-            {!efficiencyOnlyUser && <div className="h-4 w-px bg-outline-variant" />}
+            {!efficiencyOnlyUser && showPeriodSelector && <div className="h-4 w-px bg-outline-variant" />}
 
             {!efficiencyOnlyUser && (
               <button

@@ -1,4 +1,4 @@
-const DEFAULT_ALLOWED_ROUTES = ['/', '/contracts', '/series', '/reports', '/uploads', '/settings', '/efficiency'];
+const DEFAULT_ALLOWED_ROUTES = ['/', '/postventas', '/contracts', '/series', '/reports', '/uploads', '/settings', '/efficiency'];
 
 export function normalizeRoles(roles) {
   return Array.isArray(roles)
@@ -26,6 +26,10 @@ export function canManageEfficiencyConfig(user, accessContext) {
 export function canAccessRoute(routePath, user, accessContext) {
   if (routePath === '/efficiency-config') {
     return canManageEfficiencyConfig(user, accessContext);
+  }
+
+  if (routePath === '/settings' && typeof accessContext?.navigation?.can_access_settings === 'boolean') {
+    return accessContext.navigation.can_access_settings;
   }
 
   return getAllowedRoutes(accessContext).includes(routePath);

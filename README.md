@@ -90,7 +90,7 @@ Para desarrollo con hot-reload:
 
 ```bash
 npm run dev
-# → http://localhost:5173  (sin auth gate)
+# → http://10.0.0.187:5173  (sin auth gate)
 ```
 
 ### 5. Registrar la tool en PBS Hub
@@ -101,7 +101,7 @@ Para que el auth bridge funcione, el tool debe estar registrado en el panel de a
 2. Ve a **Admin → Tools → Create**.
 3. Rellena:
    - **Name**: ContractFlow
-   - **URL**: `http://localhost/contractos/`
+   - **URL**: `https://10.0.0.187/performance-sales/`
    - **Category**: IT & Systems (o la que prefieras)
    - **Is Active**: ✓
 4. Asigna acceso por usuario (`tool_user`) o departamento (`tool_department`).

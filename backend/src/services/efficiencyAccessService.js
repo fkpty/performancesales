@@ -1,4 +1,5 @@
 const pool = require('../db/connection');
+const { getSettingValue } = require('./analyticsService');
 
 const ADMIN_ROLES = new Set(['admin', 'super_admin', 'rrhh']);
 const MANAGER_ROLES = new Set(['gerente']);
@@ -7,6 +8,7 @@ const EFFICIENCY_ONLY_ROLES = new Set([...MANAGER_ROLES, ...SELLER_ROLES]);
 
 const ADMIN_ALLOWED_ROUTES = [
   '/',
+  '/postventas',
   '/contracts',
   '/series',
   '/reports',
@@ -18,11 +20,22 @@ const ADMIN_ALLOWED_ROUTES = [
 
 const DEFAULT_ALLOWED_ROUTES = [
   '/',
+  '/postventas',
   '/contracts',
   '/series',
   '/reports',
   '/uploads',
   '/settings',
+  '/efficiency',
+];
+
+const FULL_VIEW_ALLOWED_ROUTES = [
+  '/',
+  '/postventas',
+  '/contracts',
+  '/series',
+  '/reports',
+  '/uploads',
   '/efficiency',
 ];
 
@@ -44,7 +57,25 @@ async function resolveNavigationAccess(user) {
       mode: 'administrative',
       allowed_routes: ADMIN_ALLOWED_ROUTES,
       can_manage_efficiency_config: true,
+      can_access_settings: true,
+      can_upload_reports: resolveUploadAccess(user),
       is_efficiency_only: false,
+      has_full_view_access: false,
+      has_manager_assignment: false,
+      has_seller_assignment: false,
+    };
+  }
+
+  const fullViewAccessUsers = await getSettingValue('full_view_access_users', []);
+  if (matchesFullViewAccessUser(user, fullViewAccessUsers)) {
+    return {
+      mode: 'full_view_access',
+      allowed_routes: FULL_VIEW_ALLOWED_ROUTES,
+      can_manage_efficiency_config: false,
+      can_access_settings: false,
+      can_upload_reports: false,
+      is_efficiency_only: false,
+      has_full_view_access: true,
       has_manager_assignment: false,
       has_seller_assignment: false,
     };
@@ -83,7 +114,10 @@ async function resolveNavigationAccess(user) {
       mode: 'efficiency_only',
       allowed_routes: EFFICIENCY_ONLY_ALLOWED_ROUTES,
       can_manage_efficiency_config: false,
+      can_access_settings: false,
+      can_upload_reports: false,
       is_efficiency_only: true,
+      has_full_view_access: false,
       has_manager_assignment: hasManagerAssignment,
       has_seller_assignment: hasSellerAssignment,
     };
@@ -93,7 +127,10 @@ async function resolveNavigationAccess(user) {
     mode: 'default',
     allowed_routes: DEFAULT_ALLOWED_ROUTES,
     can_manage_efficiency_config: false,
+    can_access_settings: true,
+    can_upload_reports: resolveUploadAccess(user),
     is_efficiency_only: false,
+    has_full_view_access: false,
     has_manager_assignment: false,
     has_seller_assignment: false,
   };
@@ -231,7 +268,7 @@ function buildEfficiencyAccessPayload(access) {
   return {
     status: access?.status || 'no_access',
     can_view: access?.status && access.status !== 'no_access',
-    can_manage_config: access?.status === 'full_access',
+    can_manage_config: access?.status === 'full_access' && access?.reason !== 'full_view_access_setting',
     denied_reason: access?.status === 'no_access' ? access?.reason || 'not_assigned' : null,
     matched_groups: (access?.matched_groups || []).map((group) => ({
       sheet_type: group.sheet_type,
@@ -297,6 +334,28 @@ function normalizeLookupKey(value) {
     .filter(Boolean)
     .sort()
     .join(' ');
+}
+
+function matchesFullViewAccessUser(user, accessUsers) {
+  const userId = toNullableInt(user?.id);
+  const userEmail = normalizeEmail(user?.email);
+
+  return Array.isArray(accessUsers) && accessUsers.some((entry) => {
+    const entryId = toNullableInt(entry?.id);
+    if (userId != null && entryId != null && userId === entryId) {
+      return true;
+    }
+
+    return Boolean(userEmail) && userEmail === normalizeEmail(entry?.email);
+  });
+}
+
+function resolveUploadAccess(user) {
+  return Boolean(user?.canUploadReports || user?.can_upload_reports || normalizeRoles(user?.roles).some((role) => ['admin', 'super_admin'].includes(role)));
+}
+
+function normalizeEmail(value) {
+  return String(value || '').trim().toLowerCase();
 }
 
 function toNullableInt(value) {

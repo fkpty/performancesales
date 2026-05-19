@@ -164,14 +164,15 @@ CREATE TABLE IF NOT EXISTS app_settings (
 -- Default settings
 INSERT IGNORE INTO app_settings (`key`, `value`) VALUES
   ('at_risk_months', '3'),
-  ('app_version',    '1.0.0');
+  ('app_version',    '1.0.0'),
+  ('full_view_access_users', '[]');
 
 -- ============================================================
 -- Performance Sales monthly uploads
 -- ============================================================
 CREATE TABLE IF NOT EXISTS performance_sales_upload_batches (
   id                BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
-  report_type       ENUM('it','xerox') NOT NULL,
+  report_type       ENUM('it','xerox','postventas') NOT NULL,
   report_month      DATE            NOT NULL COMMENT 'Primer dia del mes del reporte',
   filename          VARCHAR(500)    NOT NULL,
   sheet_name        VARCHAR(255)    NOT NULL DEFAULT '',
@@ -189,7 +190,7 @@ CREATE TABLE IF NOT EXISTS performance_sales_upload_batches (
 CREATE TABLE IF NOT EXISTS performance_sales_rows (
   id                    BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
   batch_id              BIGINT UNSIGNED NOT NULL,
-  report_type           ENUM('it','xerox') NOT NULL,
+  report_type           ENUM('it','xerox','postventas') NOT NULL,
   report_month          DATE            NOT NULL COMMENT 'Primer dia del mes del reporte',
   order_number          BIGINT          NULL,
   account_code          VARCHAR(100)    NOT NULL DEFAULT '',
@@ -210,6 +211,7 @@ CREATE TABLE IF NOT EXISTS performance_sales_rows (
   sale_date             DATE            NULL,
   invoice_number        VARCHAR(100)    NOT NULL DEFAULT '',
   sales_person_name     VARCHAR(255)    NOT NULL DEFAULT '',
+  employee_id           VARCHAR(100)    NOT NULL DEFAULT '',
   document_type         VARCHAR(50)     NOT NULL DEFAULT '',
   business_unit         VARCHAR(100)    NOT NULL DEFAULT '',
   sales_mode            VARCHAR(100)    NOT NULL DEFAULT '',
@@ -223,6 +225,7 @@ CREATE TABLE IF NOT EXISTS performance_sales_rows (
   INDEX idx_ps_rows_sale_date (sale_date),
   INDEX idx_ps_rows_client (client_name),
   INDEX idx_ps_rows_owner (sales_person_name),
+  INDEX idx_ps_rows_employee (employee_id),
   INDEX idx_ps_rows_invoice (invoice_number),
   INDEX idx_ps_rows_serial (serial_number),
   INDEX idx_ps_rows_business (business_unit)

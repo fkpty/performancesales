@@ -3,18 +3,23 @@ const fs = require('fs/promises');
 const upload = require('../middleware/upload');
 const { parsePerformanceWorkbook, normalizeReportType } = require('../services/performanceSalesParser');
 const {
+  clearPerformanceDataByReportType,
   getPerformanceFilterOptions,
   getPerformanceOverview,
   importPerformanceBatch,
   listPerformanceRows,
   listUploadBatches,
 } = require('../services/performanceSalesService');
+const { resolveNavigationAccess } = require('../services/efficiencyAccessService');
 const { formatMonthLabel } = require('../utils/dateUtils');
 
 const router = express.Router();
 
-function requireUploadAccess(req, res) {
-  if (req.user?.canUploadReports) {
+async function requireUploadAccess(req, res) {
+  const navigationAccess = req.navigationAccess || await resolveNavigationAccess(req.user);
+  req.navigationAccess = navigationAccess;
+
+  if (navigationAccess.can_upload_reports) {
     return true;
   }
 
@@ -58,11 +63,36 @@ router.get('/uploads', async (req, res, next) => {
   }
 });
 
+router.post('/uploads/:reportType/clear', async (req, res, next) => {
+  const reportType = normalizeReportType(req.params.reportType);
+
+  if (!(await requireUploadAccess(req, res))) {
+    return;
+  }
+
+  if (!reportType) {
+    return res.status(400).json({ error: 'Tipo de reporte no soportado. Usa Xerox, IT o Post Ventas.' });
+  }
+
+  try {
+    const result = await clearPerformanceDataByReportType(reportType);
+
+    return res.json({
+      ok: true,
+      report_type: reportType,
+      deleted_rows: result.deletedRows,
+      deleted_batches: result.deletedBatches,
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 router.post('/uploads/:reportType', upload.single('file'), async (req, res, next) => {
   const reportType = normalizeReportType(req.params.reportType);
   const uploadedFile = req.file;
 
-  if (!requireUploadAccess(req, res)) {
+  if (!(await requireUploadAccess(req, res))) {
     if (uploadedFile?.path) {
       await fs.unlink(uploadedFile.path).catch(() => {});
     }
@@ -73,7 +103,7 @@ router.post('/uploads/:reportType', upload.single('file'), async (req, res, next
     if (uploadedFile?.path) {
       await fs.unlink(uploadedFile.path).catch(() => {});
     }
-    return res.status(400).json({ error: 'Tipo de reporte no soportado. Usa Xerox o IT.' });
+    return res.status(400).json({ error: 'Tipo de reporte no soportado. Usa Xerox, IT o Post Ventas.' });
   }
 
   if (!uploadedFile) {

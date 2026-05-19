@@ -10,6 +10,79 @@ const api = axios.create({
   timeout:     30000,
 });
 
+function extractPayloadMessage(data) {
+  if (typeof data === 'string' && data.trim() !== '') {
+    return data.trim();
+  }
+
+  if (data && typeof data === 'object') {
+    if (typeof data.error === 'string' && data.error.trim() !== '') {
+      return data.error.trim();
+    }
+
+    if (typeof data.message === 'string' && data.message.trim() !== '') {
+      return data.message.trim();
+    }
+  }
+
+  return '';
+}
+
+function buildFriendlyApiMessage(status, error) {
+  if (status === 401) {
+    return 'Tu sesion de PBS Hub expiro o ya no es valida. Recarga la pagina para autenticarte de nuevo.';
+  }
+
+  if (status === 403) {
+    return 'No tienes permisos para realizar esta accion en Performance Sales.';
+  }
+
+  if (status >= 500) {
+    return 'Performance Sales no esta disponible temporalmente. El servicio se esta iniciando o recuperando.';
+  }
+
+  if (error?.code === 'ECONNABORTED') {
+    return 'Performance Sales tardo demasiado en responder. Intenta de nuevo en unos segundos.';
+  }
+
+  if (!error?.response) {
+    return 'No se pudo conectar con Performance Sales. Verifica que el servicio este disponible.';
+  }
+
+  return '';
+}
+
+function normalizeApiError(error) {
+  if (error?.isNormalizedApiError) {
+    return error;
+  }
+
+  const status = Number(error?.response?.status || 0);
+  const message = buildFriendlyApiMessage(status, error)
+    || extractPayloadMessage(error?.response?.data)
+    || error?.message
+    || 'No se pudo completar la solicitud.';
+
+  const normalizedError = new Error(message);
+
+  normalizedError.name = 'ApiError';
+  normalizedError.isNormalizedApiError = true;
+  normalizedError.status = status;
+  normalizedError.code = error?.code;
+  normalizedError.response = error?.response;
+  normalizedError.request = error?.request;
+  normalizedError.cause = error;
+  normalizedError.isAuthError = status === 401 || status === 403;
+  normalizedError.isAvailabilityError = status >= 500 || error?.code === 'ECONNABORTED' || !error?.response;
+
+  return normalizedError;
+}
+
+api.interceptors.response.use(
+  response => response,
+  error => Promise.reject(normalizeApiError(error))
+);
+
 function normalizeRoles(roles) {
   return Array.isArray(roles)
     ? roles.map(role => String(role || '').trim().toLowerCase()).filter(Boolean)
@@ -101,7 +174,7 @@ async function normalizeBlobRequestError(error) {
     throw new Error(message);
   }
 
-  throw error;
+  throw normalizeApiError(error);
 }
 
 async function downloadFile(url, params = {}) {
@@ -140,6 +213,9 @@ export const fetchPerformanceFilters = (params) =>
 
 export const fetchUploadHistory = (params) =>
   api.get('/performance/uploads', { params: cleanParams(params) }).then(r => r.data);
+
+export const clearPerformanceUploadData = (reportType) =>
+  api.post(`/performance/uploads/${reportType}/clear`).then(r => r.data);
 
 export const uploadPerformanceReport = (reportType, file, onProgress) => {
   const form = new FormData();
@@ -180,6 +256,9 @@ export const exportContractSeries = (params) =>
 // ─── Settings ──────────────────────────────────────────────────
 export const fetchSettings = () =>
   api.get('/settings').then(r => r.data);
+
+export const fetchSettingsUsers = () =>
+  api.get('/settings/users').then(r => r.data);
 
 export const saveSettings = (data) =>
   api.put('/settings', data).then(r => r.data);

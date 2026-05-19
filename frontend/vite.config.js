@@ -24,11 +24,11 @@ export default defineConfig({
     },
   },
   server: {
-    host: '127.0.0.1',
+    host: '10.0.0.187',
     port: 5173,
     proxy: {
       '/performance-sales/api': {
-        target:      'http://127.0.0.1:3002',
+        target:      'http://10.0.0.187:3003',
         changeOrigin: true,
       },
     },

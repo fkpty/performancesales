@@ -5,7 +5,7 @@ let poolPromise = null;
 
 function buildConfig() {
   return {
-    server: process.env.SQLSERVER_HOST || 'localhost',
+    server: process.env.SQLSERVER_HOST || '10.0.0.187',
     port: parseInt(process.env.SQLSERVER_PORT || '1433', 10),
     database: process.env.SQLSERVER_DB_NAME || '',
     user: process.env.SQLSERVER_USER || '',

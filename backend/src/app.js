@@ -6,7 +6,11 @@ const rateLimit    = require('express-rate-limit');
 const ensureSchema   = require('./db/ensureSchema');
 const authMiddleware = require('./middleware/authMiddleware');
 const errorHandler   = require('./middleware/errorHandler');
-const { requireAdministrativeModuleAccess } = require('./middleware/moduleAccess');
+const {
+  requireAdministrativeModuleAccess,
+  requireSettingsModuleAccess,
+  requireUploadModuleAccess,
+} = require('./middleware/moduleAccess');
 
 const uploadRoute    = require('./routes/upload');
 const contractsRoute = require('./routes/contracts');
@@ -16,12 +20,12 @@ const efficiencyRoute = require('./routes/efficiency');
 const settingsRoute  = require('./routes/settings');
 
 const app  = express();
-const PORT = parseInt(process.env.PORT || '3002', 10);
+const PORT = parseInt(process.env.PORT || '3003', 10);
 const BIND_HOST = process.env.BIND_HOST || '0.0.0.0';
 const publicDir = path.resolve(__dirname, '..', '..', 'public');
 
 // ─── CORS ────────────────────────────────────────────────────
-const allowedOrigins = (process.env.CORS_ORIGINS || 'https://hub.collab.grouppbs.com,http://localhost:5173,http://127.0.0.1:5173')
+const allowedOrigins = (process.env.CORS_ORIGINS || 'https://hub.collab.grouppbs.com,https://10.0.0.187,https://10.0.0.187:5173,http://10.0.0.187:5173')
   .split(',')
   .map(s => s.trim());
 
@@ -71,12 +75,12 @@ app.get('/api/health', (_req, res) => {
 app.use('/api', authMiddleware);
 
 // ─── Routes ───────────────────────────────────────────────────
-app.use('/api/upload',    requireAdministrativeModuleAccess, uploadRoute);
+app.use('/api/upload',    requireUploadModuleAccess, uploadRoute);
 app.use('/api/contracts', requireAdministrativeModuleAccess, contractsRoute);
 app.use('/api/analytics', requireAdministrativeModuleAccess, analyticsRoute);
 app.use('/api/performance', requireAdministrativeModuleAccess, performanceRoute);
 app.use('/api/efficiency', efficiencyRoute);
-app.use('/api/settings',  requireAdministrativeModuleAccess, settingsRoute);
+app.use('/api/settings',  requireSettingsModuleAccess, settingsRoute);
 
 app.use('/performance-sales', express.static(publicDir));
 app.use('/performance-sales/public', express.static(publicDir));

@@ -7,6 +7,7 @@ const pool = require('../db/connection');
 const COOKIE_NAME = process.env.AUTH_COOKIE || 'performance_sales_token';
 const PROXY_SHARED_SECRET = process.env.PROXY_SHARED_SECRET || 'replace_with_shared_proxy_secret';
 const ALLOW_LOCAL_DEV_AUTH = process.env.ALLOW_LOCAL_DEV_AUTH === '1';
+const TRUSTED_PUBLIC_HOST = process.env.APP_PUBLIC_HOST || '10.0.0.187';
 
 async function authMiddleware(req, res, next) {
   try {
@@ -75,9 +76,7 @@ function isLocalRequest(req) {
     .map((value) => String(value));
 
   return candidates.some((value) =>
-    value.includes('127.0.0.1') ||
-    value.includes('localhost') ||
-    value.includes('10.0.0.187') ||
+    value.includes(TRUSTED_PUBLIC_HOST) ||
     value.includes('::1')
   );
 }

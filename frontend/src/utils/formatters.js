@@ -1,6 +1,11 @@
 import { formatUsdCurrency } from './currency';
 
 const COUNT_FORMATTER = new Intl.NumberFormat('en-US');
+const REPORT_TYPE_LABELS = {
+  xerox: 'Equipos Xerox',
+  it: 'Equipo IT',
+  postventas: 'Post Ventas',
+};
 
 export function formatCurrency(value, empty = '—') {
   return formatUsdCurrency(value, empty);
@@ -55,5 +60,5 @@ export function formatMonthLabel(value, empty = '—') {
 }
 
 export function formatReportType(value) {
-  return String(value || '').toLowerCase() === 'xerox' ? 'Equipos Xerox' : 'Equipo IT';
+  return REPORT_TYPE_LABELS[String(value || '').toLowerCase()] || String(value || '').trim() || '—';
 }

@@ -29,7 +29,7 @@ $HUB_DB_USER     = contractosRegisterGlobalConfig('HUB_DB_USER', getenv('HUB_DB_
 $HUB_DB_PASS     = contractosRegisterGlobalConfig('HUB_DB_PASS', getenv('HUB_DB_PASS') ?: '');
 $HUB_DB_NAME     = contractosRegisterGlobalConfig('HUB_DB_NAME', getenv('HUB_DB_NAME') ?: 'pbs_hub');
 
-$APP_DB_HOST     = contractosRegisterGlobalConfig('APP_DB_HOST', getenv('APP_DB_HOST') ?: '127.0.0.1');
+$APP_DB_HOST     = contractosRegisterGlobalConfig('APP_DB_HOST', getenv('APP_DB_HOST') ?: '10.0.0.187');
 $APP_DB_PORT     = contractosRegisterGlobalConfig('APP_DB_PORT', getenv('APP_DB_PORT') ?: '3306');
 $APP_DB_USER     = contractosRegisterGlobalConfig('APP_DB_USER', getenv('APP_DB_USER') ?: 'root');
 $APP_DB_PASS     = contractosRegisterGlobalConfig('APP_DB_PASS', getenv('APP_DB_PASS') ?: '');
@@ -94,7 +94,7 @@ function validateHubAccess(): ?array
     // 1a. PHP session fast-path (works even without contractos_db)
     ensureSessionStarted();
 
-    if ($APP_ALLOW_LOCAL_DEV_AUTH === '1' && in_array($_SERVER['REMOTE_ADDR'] ?? '', ['127.0.0.1', '::1', '10.0.0.187'], true)) {
+    if ($APP_ALLOW_LOCAL_DEV_AUTH === '1' && in_array($_SERVER['REMOTE_ADDR'] ?? '', ['::1', '10.0.0.187', '::ffff:10.0.0.187'], true)) {
         $_SESSION['user_id'] = 1;
         $_SESSION['user_name'] = 'Local Performance Sales Admin';
         $_SESSION['user_email'] = 'local@performance-sales.test';

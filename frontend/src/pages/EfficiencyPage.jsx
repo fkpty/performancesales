@@ -2,7 +2,7 @@ import ReactECharts from 'echarts-for-react';
 import { useEffect, useState } from 'react';
 import AccessDeniedState from '../components/ui/AccessDeniedState';
 import { exportEfficiencyProductivity, fetchEfficiencyOverview } from '../services/api';
-import usePerformanceStore from '../store/performanceStore';
+import usePerformanceStore, { buildDateParams } from '../store/performanceStore';
 import { formatCount, formatCurrency, formatPercent } from '../utils/formatters';
 
 // ─── Semáforo helpers ────────────────────────────────────────────────────────
@@ -53,7 +53,11 @@ const SALES_COLUMNS = [
 
 export default function EfficiencyPage() {
   const year = usePerformanceStore((state) => state.year);
+  const period = usePerformanceStore((state) => state.period);
   const month = usePerformanceStore((state) => state.month);
+  const quarter = usePerformanceStore((state) => state.quarter);
+  const startDate = usePerformanceStore((state) => state.startDate);
+  const endDate = usePerformanceStore((state) => state.endDate);
   const accessContext = usePerformanceStore((state) => state.accessContext);
   const [overview, setOverview] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -65,6 +69,7 @@ export default function EfficiencyPage() {
 
   useEffect(() => {
     let active = true;
+    const dateParams = buildDateParams({ year, period, month, quarter, startDate, endDate });
     setLoading(true);
     setError('');
     setExportError('');
@@ -78,7 +83,7 @@ export default function EfficiencyPage() {
       };
     }
 
-    fetchEfficiencyOverview({ year, month })
+    fetchEfficiencyOverview(dateParams)
       .then((response) => {
         if (!active) {
           return;
@@ -104,21 +109,24 @@ export default function EfficiencyPage() {
     return () => {
       active = false;
     };
-  }, [accessDenied, month, year]);
+  }, [accessDenied, endDate, month, period, quarter, startDate, year]);
 
   const salesSheet = overview?.sheets?.sales_productivity || null;
+  const showSellerEfficiencyChart = Boolean(salesSheet);
+  const showManagerEfficiencyChart = scopedStatus !== 'seller_scoped';
   const summaryTitle = scopedStatus === 'seller_scoped' ? 'Tu eficiencia' : 'Eficiencia';
   const summaryText = scopedStatus === 'manager_scoped'
     ? 'Vista limitada a los grupos asignados a tu usuario autenticado.'
     : scopedStatus === 'seller_scoped'
       ? 'Vista limitada a tu fila, tus metricas y tu resumen.'
       : 'Replica operativa del workbook con YTD Revenue y YTD Profit tomados segun la fuente configurada de cada grupo.';
+  const dateParams = buildDateParams({ year, period, month, quarter, startDate, endDate });
 
   const handleExportSalesProductivity = async () => {
     try {
       setExporting(true);
       setExportError('');
-      await exportEfficiencyProductivity({ year, month });
+      await exportEfficiencyProductivity(dateParams);
     } catch (requestError) {
       setExportError(
         requestError?.response?.data?.error
@@ -141,7 +149,7 @@ export default function EfficiencyPage() {
             </p>
           </div>
           <div className="rounded-xl bg-surface-container-low px-md py-sm text-body-sm text-on-surface-variant border border-outline-variant">
-            Periodo de configuracion: <strong className="text-on-surface">{year}-{String(month).padStart(2, '0')}</strong>
+            Periodo de configuracion: <strong className="text-on-surface">{String(overview?.config_month || '').slice(0, 7) || '—'}</strong>
           </div>
         </div>
       </section>
@@ -172,7 +180,9 @@ export default function EfficiencyPage() {
             <SheetSummaryCard sheet={salesSheet} />
           </section>
 
-          <EfficiencyChart sheet={salesSheet} />
+          {showSellerEfficiencyChart && <SellerEfficiencyChart sheet={salesSheet} />}
+
+          {showManagerEfficiencyChart && <ManagerEfficiencyChart sheet={salesSheet} />}
 
           <SheetPanel
             title="Productividad comercial"
@@ -194,13 +204,17 @@ function SheetSummaryCard({ sheet }) {
     return null;
   }
 
+  const monthsLabel = Number.isFinite(Number(sheet.active_month_count))
+    ? `${formatCount(sheet.active_month_count)} meses activos`
+    : null;
+
   return (
     <section className="bg-surface-container-lowest rounded-2xl border border-outline-variant shadow-sm overflow-hidden">
       <div className="px-lg py-md border-b border-outline-variant bg-surface-container-low/30 flex flex-wrap items-center justify-between gap-md">
         <div>
           <h3 className="font-h3 text-h3 text-on-surface">{sheet.label}</h3>
           <p className="text-[12px] text-on-surface-variant mt-xs">
-            Año base {sheet.report_year} · YTD month #{sheet.ytd_month_number}
+            {sheet.filter_label || `Año base ${sheet.report_year}`} · YTD month #{sheet.ytd_month_number}{monthsLabel ? ` · ${monthsLabel}` : ''}
           </p>
         </div>
         <div className="flex items-center gap-xs text-body-sm text-on-surface-variant">
@@ -392,10 +406,9 @@ function renderCell(row, column) {
 }
 
 // ─── Seller Efficiency Chart ────────────────────────────────────────────────
-function EfficiencyChart({ sheet }) {
+function SellerEfficiencyChart({ sheet }) {
   if (!sheet) return null;
 
-  // Collect only member rows (no totals)
   const sellers = [];
   (sheet.groups || []).forEach((group) => {
     (group.members || []).forEach((member) => {
@@ -406,15 +419,97 @@ function EfficiencyChart({ sheet }) {
       sellers.push({
         name: member.seller_name || '—',
         efficiency: member.efficiency_rate ?? 0,
+        managerName: group.manager_name || group.group_name || '—',
       });
     });
   });
 
   if (sellers.length === 0) return null;
 
-  // Sort descending
   const sorted = [...sellers].sort((a, b) => b.efficiency - a.efficiency);
-  const names = sorted.map((s) => s.name);
+  const names = sorted.map((seller) => seller.name);
+  const values = sorted.map((seller) => ({
+    value: seller.efficiency,
+    itemStyle: { color: getEfficiencyHex(seller.efficiency) },
+    label: { show: true, position: 'right', formatter: (params) => params.value.toFixed(2) },
+  }));
+
+  const option = {
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      formatter: (params) => {
+        const point = params[0];
+        const current = sorted[point.dataIndex];
+        return `<b>${point.name}</b><br/>Gerente: <b>${current?.managerName || '—'}</b><br/>Eficiencia: <b>${Number(point.value).toFixed(2)}</b>`;
+      },
+    },
+    grid: { left: '2%', right: '12%', top: '4%', bottom: '4%', containLabel: true },
+    xAxis: {
+      type: 'value',
+      axisLabel: { fontSize: 11, color: '#64748b' },
+      splitLine: { lineStyle: { color: '#e2e8f0' } },
+    },
+    yAxis: {
+      type: 'category',
+      data: names,
+      inverse: true,
+      axisLabel: { fontSize: 11, color: '#334155', width: 140, overflow: 'truncate' },
+    },
+    series: [
+      {
+        type: 'bar',
+        data: values,
+        barMaxWidth: 28,
+        label: {
+          show: true,
+          position: 'right',
+          color: '#334155',
+          fontSize: 11,
+          formatter: (params) => Number(params.value).toFixed(2),
+        },
+      },
+    ],
+  };
+
+  const chartHeight = Math.max(160, sorted.length * 36 + 40);
+
+  return (
+    <section className="bg-surface-container-lowest rounded-2xl border border-outline-variant shadow-sm overflow-hidden">
+      <div className="px-lg py-md border-b border-outline-variant bg-surface-container-low/30 flex flex-wrap items-center justify-between gap-sm">
+        <div>
+          <h3 className="font-h3 text-h3 text-on-surface">Eficiencia por vendedor</h3>
+          <p className="text-[12px] text-on-surface-variant mt-xs">Ratio individual: YTD Profit / Salary Fully Loaded</p>
+        </div>
+        <div className="flex items-center gap-sm text-[11px] text-on-surface-variant">
+          <span className="flex items-center gap-xs"><span className="inline-block w-3 h-3 rounded-sm bg-green-500" /> ≥ 7</span>
+          <span className="flex items-center gap-xs"><span className="inline-block w-3 h-3 rounded-sm bg-yellow-400" /> 5 – 6.99</span>
+          <span className="flex items-center gap-xs"><span className="inline-block w-3 h-3 rounded-sm bg-red-400" /> &lt; 5</span>
+        </div>
+      </div>
+      <div className="p-lg">
+        <ReactECharts option={option} style={{ height: chartHeight }} notMerge />
+      </div>
+    </section>
+  );
+}
+
+// ─── Manager Efficiency Chart ───────────────────────────────────────────────
+function ManagerEfficiencyChart({ sheet }) {
+  if (!sheet) return null;
+
+  const managers = (sheet.groups || [])
+    .map((group) => ({
+      name: group.manager_name || group.group_name || '—',
+      efficiency: group.totals?.efficiency_rate ?? 0,
+      sellers: (group.members || []).filter((member) => !member.is_other_row).length,
+    }))
+    .filter((group) => group.name);
+
+  if (managers.length === 0) return null;
+
+  const sorted = [...managers].sort((a, b) => b.efficiency - a.efficiency);
+  const names = sorted.map((group) => group.name);
   const values = sorted.map((s) => ({
     value: s.efficiency,
     itemStyle: { color: getEfficiencyHex(s.efficiency) },
@@ -427,7 +522,8 @@ function EfficiencyChart({ sheet }) {
       axisPointer: { type: 'shadow' },
       formatter: (params) => {
         const p = params[0];
-        return `<b>${p.name}</b><br/>Eficiencia: <b>${Number(p.value).toFixed(2)}</b>`;
+        const current = sorted[p.dataIndex];
+        return `<b>${p.name}</b><br/>Eficiencia: <b>${Number(p.value).toFixed(2)}</b><br/>Vendedores: <b>${current?.sellers ?? 0}</b>`;
       },
     },
     grid: { left: '2%', right: '12%', top: '4%', bottom: '4%', containLabel: true },
@@ -459,8 +555,8 @@ function EfficiencyChart({ sheet }) {
     <section className="bg-surface-container-lowest rounded-2xl border border-outline-variant shadow-sm overflow-hidden">
       <div className="px-lg py-md border-b border-outline-variant bg-surface-container-low/30 flex flex-wrap items-center justify-between gap-sm">
         <div>
-          <h3 className="font-h3 text-h3 text-on-surface">Eficiencia por vendedor</h3>
-          <p className="text-[12px] text-on-surface-variant mt-xs">Ratio YTD Profit / Salary Fully Loaded</p>
+          <h3 className="font-h3 text-h3 text-on-surface">Eficiencia por gerente</h3>
+          <p className="text-[12px] text-on-surface-variant mt-xs">Ratio del equipo: YTD Profit / Salary Fully Loaded</p>
         </div>
         <div className="flex items-center gap-sm text-[11px] text-on-surface-variant">
           <span className="flex items-center gap-xs"><span className="inline-block w-3 h-3 rounded-sm bg-green-500" /> ≥ 7</span>

@@ -1,4 +1,5 @@
 backend/.env
+backend/.api-backend-start.marker
 backend/node_modules/
 frontend/node_modules/
 uploads/

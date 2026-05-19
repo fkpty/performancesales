@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { uploadPerformanceReport } from '../services/api';
+import { clearPerformanceUploadData, uploadPerformanceReport } from '../services/api';
 import usePerformanceStore from '../store/performanceStore';
 import { formatMonthLabel, formatReportType } from '../utils/formatters';
 
@@ -14,6 +14,11 @@ const REPORT_CONFIG = {
     description: 'Carga el reporte mensual de margen para el portafolio IT.',
     helper: 'Las cargas anteriores del mismo mes quedan archivadas y la mas reciente pasa a ser la activa.',
   },
+  postventas: {
+    title: 'Post Ventas',
+    description: 'Carga el reporte mensual del equipo de Mirna Castillos para Post Ventas.',
+    helper: 'El archivo se relaciona con el grupo 4 por Employee Code y calcula YTD Rev / YTD Profit desde Total Corp Price y Total Corp Cost.',
+  },
 };
 
 function createUploadState() {
@@ -22,6 +27,8 @@ function createUploadState() {
     status: 'idle',
     progress: 0,
     result: null,
+    deleteStatus: 'idle',
+    deleteResult: null,
   };
 }
 
@@ -46,6 +53,46 @@ export default function UploadModal({ onClose }) {
         result: null,
       },
     }));
+  };
+
+  const handleDelete = async (reportType) => {
+    const reportTypeLabel = formatReportType(reportType);
+
+    setUploads(current => ({
+      ...current,
+      [reportType]: {
+        ...current[reportType],
+        deleteStatus: 'deleting',
+        deleteResult: null,
+      },
+    }));
+
+    try {
+      const result = await clearPerformanceUploadData(reportType);
+      setUploads(current => ({
+        ...current,
+        [reportType]: {
+          ...current[reportType],
+          deleteStatus: 'success',
+          deleteResult: {
+            deletedRows: Number(result?.deleted_rows || 0),
+            deletedBatches: Number(result?.deleted_batches || 0),
+          },
+        },
+      }));
+      refreshAll();
+    } catch (error) {
+      setUploads(current => ({
+        ...current,
+        [reportType]: {
+          ...current[reportType],
+          deleteStatus: 'error',
+          deleteResult: {
+            error: error?.message || `No se pudo eliminar la informacion cargada de ${reportTypeLabel}.`,
+          },
+        },
+      }));
+    }
   };
 
   const handleSubmit = async (reportType) => {
@@ -133,6 +180,7 @@ export default function UploadModal({ onClose }) {
             {Object.entries(REPORT_CONFIG).map(([reportType, config]) => {
               const uploadState = uploads[reportType];
               const isProcessing = uploadState.status === 'uploading';
+              const isDeleting = uploadState.deleteStatus === 'deleting';
 
               return (
                 <div key={reportType} className="border border-outline-variant rounded-2xl p-md space-y-md bg-surface-container-low/30">
@@ -224,7 +272,7 @@ export default function UploadModal({ onClose }) {
 
                   <button
                     onClick={() => handleSubmit(reportType)}
-                    disabled={isProcessing || !uploadState.file}
+                    disabled={isProcessing || isDeleting || !uploadState.file}
                     className="w-full px-md py-xs bg-primary-container text-on-primary rounded-lg font-body-sm hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-xs"
                   >
                     {uploadState.status === 'uploading' ? (
@@ -239,6 +287,48 @@ export default function UploadModal({ onClose }) {
                       </>
                     )}
                   </button>
+
+                  <button
+                    onClick={() => handleDelete(reportType)}
+                    disabled={isProcessing || isDeleting}
+                    className="w-full px-md py-xs border border-red-300 bg-red-50 text-red-700 rounded-lg font-body-sm hover:bg-red-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-xs"
+                  >
+                    {isDeleting ? (
+                      <>
+                        <span className="h-4 w-4 border-2 border-red-400 border-t-transparent rounded-full animate-spin" />
+                        Eliminando informacion...
+                      </>
+                    ) : (
+                      <>
+                        <span className="material-symbols-outlined text-[18px]">delete_forever</span>
+                        Eliminar info cargada
+                      </>
+                    )}
+                  </button>
+
+                  {uploadState.deleteStatus === 'success' && uploadState.deleteResult && (
+                    <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-md space-y-xs">
+                      <div className="flex items-center gap-xs text-emerald-800 font-semibold">
+                        <span className="material-symbols-outlined text-[20px]">delete_sweep</span>
+                        Eliminacion completada
+                      </div>
+                      <p className="text-[13px] text-emerald-700">
+                        {uploadState.deleteResult.deletedRows || uploadState.deleteResult.deletedBatches
+                          ? `Se eliminaron ${uploadState.deleteResult.deletedRows} registros y ${uploadState.deleteResult.deletedBatches} lotes de ${formatReportType(reportType)}.`
+                          : `No habia informacion cargada para ${formatReportType(reportType)}.`}
+                      </p>
+                    </div>
+                  )}
+
+                  {uploadState.deleteStatus === 'error' && uploadState.deleteResult?.error && (
+                    <div className="bg-error-container border border-red-200 rounded-xl p-md space-y-xs">
+                      <div className="flex items-center gap-xs text-on-error-container font-semibold">
+                        <span className="material-symbols-outlined text-[20px] text-error">error</span>
+                        No se pudo eliminar la informacion
+                      </div>
+                      <p className="text-[13px] text-on-error-container">{uploadState.deleteResult.error}</p>
+                    </div>
+                  )}
                 </div>
               );
             })}

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import Pagination from '../components/ui/Pagination';
+import usePerformancePageScope from '../hooks/usePerformancePageScope';
 import usePerformanceStore from '../store/performanceStore';
 import {
   formatCount,
@@ -22,15 +23,12 @@ const SORTABLE_COLUMNS = {
 
 export default function ReportsPage() {
   const rows = usePerformanceStore(s => s.rows);
-  const loadRows = usePerformanceStore(s => s.loadRows);
   const setRowsPage = usePerformanceStore(s => s.setRowsPage);
   const setRowsSearch = usePerformanceStore(s => s.setRowsSearch);
   const setRowsSort = usePerformanceStore(s => s.setRowsSort);
   const [search, setSearch] = useState(rows.search);
 
-  useEffect(() => {
-    loadRows();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  usePerformancePageScope('', 'rows');
 
   useEffect(() => {
     setSearch(rows.search);
@@ -120,7 +118,7 @@ export default function ReportsPage() {
                 <Td>{formatCurrency(row.gross_profit)}</Td>
                 <Td>{formatPercent(row.margin)}</Td>
                 <Td>
-                  <span className={`inline-flex items-center px-sm py-[3px] rounded-full text-[12px] font-semibold ${row.report_type === 'xerox' ? 'bg-sky-100 text-sky-800' : 'bg-amber-100 text-amber-800'}`}>
+                  <span className={`inline-flex items-center px-sm py-[3px] rounded-full text-[12px] font-semibold ${getReportTypeBadgeClass(row.report_type)}`}>
                     {formatReportType(row.report_type)}
                   </span>
                 </Td>
@@ -145,4 +143,16 @@ export default function ReportsPage() {
 
 function Td({ children }) {
   return <td className="px-md py-sm text-on-surface">{children}</td>;
+}
+
+function getReportTypeBadgeClass(reportType) {
+  if (reportType === 'xerox') {
+    return 'bg-sky-100 text-sky-800';
+  }
+
+  if (reportType === 'postventas') {
+    return 'bg-emerald-100 text-emerald-800';
+  }
+
+  return 'bg-amber-100 text-amber-800';
 }

@@ -24,6 +24,7 @@ const INSERT_COLUMNS = [
   'sale_date',
   'invoice_number',
   'sales_person_name',
+  'employee_id',
   'document_type',
   'business_unit',
   'sales_mode',
@@ -32,8 +33,13 @@ const INSERT_COLUMNS = [
   'fiscal_sequence',
   'raw_payload',
 ];
-const INSERT_PLACEHOLDER = '(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)';
+const INSERT_PLACEHOLDER = `(${INSERT_COLUMNS.map(() => '?').join(',')})`;
 const MAX_INSERT_ROWS = 500;
+const REPORT_TYPES = ['xerox', 'it', 'postventas'];
+const REPORT_SCOPES = {
+  dashboard: ['xerox', 'it'],
+  postventas: ['postventas'],
+};
 
 async function importPerformanceBatch({ reportType, reportMonth, filename, sheetName, records, errors = [], uploadedBy = null }) {
   if (!records.length) {
@@ -45,12 +51,19 @@ async function importPerformanceBatch({ reportType, reportMonth, filename, sheet
   try {
     await connection.beginTransaction();
 
-    const [replaceResult] = await connection.execute(
-      `UPDATE performance_sales_upload_batches
-       SET is_active = 0
-       WHERE report_type = ? AND report_month = ? AND is_active = 1`,
-      [reportType, reportMonth]
-    );
+    const [replaceResult] = reportType === 'postventas'
+      ? await connection.execute(
+        `UPDATE performance_sales_upload_batches
+         SET is_active = 0
+         WHERE report_type = ? AND is_active = 1`,
+        [reportType]
+      )
+      : await connection.execute(
+        `UPDATE performance_sales_upload_batches
+         SET is_active = 0
+         WHERE report_type = ? AND report_month = ? AND is_active = 1`,
+        [reportType, reportMonth]
+      );
 
     const [insertBatchResult] = await connection.execute(
       `INSERT INTO performance_sales_upload_batches (
@@ -83,7 +96,7 @@ async function importPerformanceBatch({ reportType, reportMonth, filename, sheet
       const values = chunk.map(record => [
         batchId,
         reportType,
-        reportMonth,
+        normalizeDateValue(record.report_month) || reportMonth,
         record.order_number,
         record.account_code || '',
         record.client_name || '',
@@ -103,6 +116,7 @@ async function importPerformanceBatch({ reportType, reportMonth, filename, sheet
         record.sale_date,
         record.invoice_number || '',
         record.sales_person_name || '',
+        record.employee_id || '',
         record.document_type || '',
         record.business_unit || '',
         record.sales_mode || '',
@@ -133,14 +147,68 @@ async function importPerformanceBatch({ reportType, reportMonth, filename, sheet
   }
 }
 
+async function clearPerformanceDataByReportType(reportType) {
+  const normalizedReportType = normalizeReportType(reportType);
+
+  if (!normalizedReportType) {
+    throw new Error('Tipo de reporte no soportado. Usa Xerox, IT o Post Ventas.');
+  }
+
+  const connection = await pool.getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    const [[rowsCountRow]] = await connection.query(
+      `SELECT COUNT(*) AS total
+       FROM performance_sales_rows
+       WHERE report_type = ?`,
+      [normalizedReportType]
+    );
+
+    const [[batchesCountRow]] = await connection.query(
+      `SELECT COUNT(*) AS total
+       FROM performance_sales_upload_batches
+       WHERE report_type = ?`,
+      [normalizedReportType]
+    );
+
+    await connection.execute(
+      `DELETE FROM performance_sales_rows
+       WHERE report_type = ?`,
+      [normalizedReportType]
+    );
+
+    await connection.execute(
+      `DELETE FROM performance_sales_upload_batches
+       WHERE report_type = ?`,
+      [normalizedReportType]
+    );
+
+    await connection.commit();
+
+    return {
+      reportType: normalizedReportType,
+      deletedRows: Number(rowsCountRow?.total || 0),
+      deletedBatches: Number(batchesCountRow?.total || 0),
+    };
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
+
 async function getPerformanceOverview(params = {}) {
   const { whereSql, values } = buildRowsWhere(params, { activeOnly: true });
+  const rowMonthSql = buildRowMonthExpression();
 
   const [[summaryRow]] = await pool.query(
     `SELECT
       COUNT(*) AS rows_count,
       COUNT(DISTINCT NULLIF(r.invoice_number, '')) AS invoices_count,
-      COUNT(DISTINCT DATE_FORMAT(b.report_month, '%Y-%m')) AS active_months,
+      COUNT(DISTINCT DATE_FORMAT(${rowMonthSql}, '%Y-%m')) AS active_months,
       COUNT(DISTINCT b.id) AS active_batches,
       COALESCE(SUM(r.quantity), 0) AS total_quantity,
       COALESCE(SUM(r.revenue), 0) AS total_revenue,
@@ -159,7 +227,7 @@ async function getPerformanceOverview(params = {}) {
 
   const [monthlyRows] = await pool.query(
     `SELECT
-      b.report_month,
+      ${rowMonthSql} AS report_month,
       b.report_type,
       COUNT(*) AS rows_count,
       COALESCE(SUM(r.quantity), 0) AS total_quantity,
@@ -173,8 +241,8 @@ async function getPerformanceOverview(params = {}) {
     FROM performance_sales_rows r
     INNER JOIN performance_sales_upload_batches b ON b.id = r.batch_id
     WHERE ${whereSql}
-    GROUP BY b.report_month, b.report_type
-    ORDER BY b.report_month ASC, b.report_type ASC`,
+    GROUP BY ${rowMonthSql}, b.report_type
+    ORDER BY ${rowMonthSql} ASC, b.report_type ASC`,
     values
   );
 
@@ -433,6 +501,8 @@ async function listUploadBatches(params = {}) {
 
 async function getPerformanceFilterOptions(params = {}) {
   const { whereSql, values } = buildRowsWhere(params, { activeOnly: true });
+  const { whereSql: yearWhereSql, values: yearValues } = buildRowsWhere(params, { activeOnly: true, ignorePeriod: true });
+  const rowMonthSql = buildRowMonthExpression();
 
   const [filterRows] = await pool.query(
     `SELECT 'clients' AS filter_name, r.client_name AS filter_value
@@ -453,10 +523,14 @@ async function getPerformanceFilterOptions(params = {}) {
   );
 
   const [yearRows] = await pool.query(
-    `SELECT DISTINCT YEAR(report_month) AS year_value
-     FROM performance_sales_upload_batches
-     WHERE is_active = 1
+    `SELECT DISTINCT YEAR(${rowMonthSql}) AS year_value
+     FROM performance_sales_rows r
+     INNER JOIN performance_sales_upload_batches b ON b.id = r.batch_id
+     WHERE ${yearWhereSql}
+       AND ${rowMonthSql} IS NOT NULL
      ORDER BY year_value DESC`
+    ,
+    yearValues
   );
 
   const grouped = {
@@ -476,7 +550,7 @@ async function getPerformanceFilterOptions(params = {}) {
     clients: Array.from(grouped.clients).sort(),
     owners: Array.from(grouped.owners).sort(),
     businesses: Array.from(grouped.businesses).sort(),
-    reportTypes: ['xerox', 'it'],
+    reportTypes: resolveAvailableReportTypes(params),
     years: yearRows
       .map(row => Number(row.year_value))
       .filter(year => Number.isFinite(year) && year > 0),
@@ -492,12 +566,21 @@ function buildRowsWhere(params = {}, options = {}) {
   }
 
   const reportType = normalizeReportType(params.reportType);
-  if (reportType) {
+  const scopedReportTypes = resolveScopedReportTypes(params);
+
+  if (reportType && scopedReportTypes && !scopedReportTypes.includes(reportType)) {
+    clauses.push('1 = 0');
+  } else if (reportType) {
     clauses.push('b.report_type = ?');
     values.push(reportType);
+  } else if (scopedReportTypes?.length) {
+    clauses.push(`b.report_type IN (${scopedReportTypes.map(() => '?').join(',')})`);
+    values.push(...scopedReportTypes);
   }
 
-  applyPeriodFilter(params, clauses, values, 'b.report_month');
+  if (!options.ignorePeriod) {
+    applyPeriodFilter(params, clauses, values, buildRowMonthExpression());
+  }
 
   if (params.client) {
     clauses.push('r.client_name = ?');
@@ -537,14 +620,20 @@ function buildBatchWhere(params = {}) {
   const clauses = ['1 = 1'];
   const values = [];
   const reportType = normalizeReportType(params.reportType);
+  const scopedReportTypes = resolveScopedReportTypes(params);
 
-  if (reportType) {
-    clauses.push('b.report_type = ?');
-    values.push(reportType);
+  if (params?.forceActiveOnly || String(params.activeOnly || '').trim() === 'true') {
+    clauses.push('b.is_active = 1');
   }
 
-  if (String(params.activeOnly || '').trim() === 'true') {
-    clauses.push('b.is_active = 1');
+  if (reportType && scopedReportTypes && !scopedReportTypes.includes(reportType)) {
+    clauses.push('1 = 0');
+  } else if (reportType) {
+    clauses.push('b.report_type = ?');
+    values.push(reportType);
+  } else if (scopedReportTypes?.length) {
+    clauses.push(`b.report_type IN (${scopedReportTypes.map(() => '?').join(',')})`);
+    values.push(...scopedReportTypes);
   }
 
   applyPeriodFilter(params, clauses, values, 'b.report_month');
@@ -585,6 +674,14 @@ function applyPeriodFilter(params, clauses, values, column) {
   }
 }
 
+function buildRowMonthExpression(rowAlias = 'r', batchAlias = 'b') {
+  return `CASE
+    WHEN ${batchAlias}.report_type = 'postventas' AND ${rowAlias}.sale_date IS NOT NULL
+      THEN DATE_SUB(${rowAlias}.sale_date, INTERVAL DAYOFMONTH(${rowAlias}.sale_date) - 1 DAY)
+    ELSE COALESCE(${rowAlias}.report_month, ${batchAlias}.report_month)
+  END`;
+}
+
 function resolveSort(sortBy, sortDir) {
   const columns = {
     report_month: 'r.report_month',
@@ -622,7 +719,21 @@ function formatSummary(row = {}) {
 
 function normalizeReportType(value) {
   const normalized = String(value || '').trim().toLowerCase();
-  return normalized === 'xerox' || normalized === 'it' ? normalized : '';
+  return REPORT_TYPES.includes(normalized) ? normalized : '';
+}
+
+function resolveReportScope(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return Object.prototype.hasOwnProperty.call(REPORT_SCOPES, normalized) ? normalized : '';
+}
+
+function resolveScopedReportTypes(params = {}) {
+  const scope = resolveReportScope(params.scope || params.reportScope);
+  return scope ? REPORT_SCOPES[scope] : null;
+}
+
+function resolveAvailableReportTypes(params = {}) {
+  return resolveScopedReportTypes(params) || REPORT_TYPES;
 }
 
 function normalizeDateValue(value) {
@@ -639,6 +750,7 @@ function normalizeDateValue(value) {
 }
 
 module.exports = {
+  clearPerformanceDataByReportType,
   getPerformanceFilterOptions,
   getPerformanceOverview,
   importPerformanceBatch,

@@ -21,6 +21,7 @@ const SHEET_DEFINITIONS = {
 };
 const SHEET_TYPES = Object.keys(SHEET_DEFINITIONS);
 const EFFICIENCY_MEMBER_INSERT_PLACEHOLDERS = new Array(27).fill('?').join(',');
+const POSTSALES_REPORT_TYPE = 'postventas';
 const EFFICIENCY_EXPORT_COLUMNS = [
   { key: 'group_name', header: 'Grupo', width: 26 },
   { key: 'manager_name', header: 'Gerente', width: 24 },
@@ -41,8 +42,15 @@ const EFFICIENCY_EXPORT_COLUMNS = [
 const seedPromises = new Map();
 
 async function getEfficiencyOverview(params = {}, user = null) {
-  const config = await getEfficiencyConfig(params);
-  const access = resolveEfficiencyScope(user, config);
+  const overviewContext = await resolveEfficiencyOverviewContext(params);
+  const config = await getEfficiencyConfig({
+    ...params,
+    configMonth: overviewContext.config_month,
+  });
+  const navigation = await resolveNavigationAccess(user);
+  const access = navigation?.has_full_view_access
+    ? createFullAccessScope('full_view_access_setting')
+    : resolveEfficiencyScope(user, config);
   if (access.status === 'no_access') {
     throw createEfficiencyForbiddenError('No tienes acceso a datos de eficiencia para este periodo.');
   }
@@ -51,11 +59,12 @@ async function getEfficiencyOverview(params = {}, user = null) {
   const sheets = {};
 
   for (const sheetType of SHEET_TYPES) {
-    sheets[sheetType] = await buildSheetOverview(scopedConfig.sheets[sheetType]);
+    sheets[sheetType] = await buildSheetOverview(scopedConfig.sheets[sheetType], overviewContext);
   }
 
   return {
-    config_month: scopedConfig.config_month,
+    config_month: overviewContext.config_month || scopedConfig.config_month,
+    filter: buildEfficiencyFilterPayload(overviewContext),
     access: buildEfficiencyAccessPayload(access),
     sheets,
   };
@@ -79,12 +88,19 @@ async function saveEfficiencyConfig(params = {}, payload = {}, user = null) {
 }
 
 async function getEfficiencyAccessSummary(params = {}, user = null) {
-  const config = await getEfficiencyConfig(params);
+  const overviewContext = await resolveEfficiencyOverviewContext(params);
+  const config = await getEfficiencyConfig({
+    ...params,
+    configMonth: overviewContext.config_month,
+  });
   const navigation = await resolveNavigationAccess(user);
-  const access = resolveEfficiencyScope(user, config);
+  const access = navigation?.has_full_view_access
+    ? createFullAccessScope('full_view_access_setting')
+    : resolveEfficiencyScope(user, config);
 
   return {
-    config_month: config.config_month,
+    config_month: overviewContext.config_month || config.config_month,
+    filter: buildEfficiencyFilterPayload(overviewContext),
     navigation,
     efficiency: buildEfficiencyAccessPayload(access),
   };
@@ -97,7 +113,7 @@ async function exportEfficiencyProductivityWorkbook(params = {}, user = null) {
   const sheet = overview.sheets.sales_productivity;
 
   worksheet.addRow(['Performance Sales - Eficiencia']);
-  worksheet.addRow(['Periodo', overview.config_month.slice(0, 7)]);
+  worksheet.addRow(['Periodo', overview.filter?.label || overview.config_month.slice(0, 7)]);
   worksheet.addRow(['Alcance', overview.access?.status || 'no_access']);
   worksheet.addRow([]);
 
@@ -133,13 +149,14 @@ async function exportEfficiencyProductivityWorkbook(params = {}, user = null) {
   };
 }
 
-async function buildSheetOverview(sheetConfig) {
-  const metricAssignments = await fetchYtdMetricsBySeller(sheetConfig);
-  const groups = sheetConfig.groups.map((group) => buildOverviewGroup(sheetConfig, group, metricAssignments));
-  const grandTotals = buildGrandTotals(sheetConfig.sheet_type, groups);
+async function buildSheetOverview(sheetConfig, overviewContext = null) {
+  const effectiveSheetConfig = applyOverviewContextToSheet(sheetConfig, overviewContext);
+  const metricAssignments = await fetchYtdMetricsBySeller(effectiveSheetConfig, overviewContext);
+  const groups = effectiveSheetConfig.groups.map((group) => buildOverviewGroup(effectiveSheetConfig, group, metricAssignments));
+  const grandTotals = buildGrandTotals(effectiveSheetConfig.sheet_type, groups);
 
   return {
-    ...sheetConfig,
+    ...effectiveSheetConfig,
     groups,
     grand_totals: grandTotals,
   };
@@ -253,28 +270,49 @@ function buildGrandTotals(sheetType, groups) {
   };
 }
 
-async function fetchYtdMetricsBySeller(sheetConfig) {
-  const reportYear = Number(sheetConfig?.report_year);
-  const ytdMonthNumber = Number(sheetConfig?.ytd_month_number);
-  if (!Number.isFinite(reportYear) || reportYear <= 0 || !Number.isFinite(ytdMonthNumber) || ytdMonthNumber <= 0) {
+async function fetchYtdMetricsBySeller(sheetConfig, overviewContext = null) {
+  const periodFilter = buildEfficiencyMetricsPeriodFilter(sheetConfig, overviewContext);
+  if (!periodFilter?.whereSql) {
     return createEmptyMetricAssignments();
   }
 
   const [rows] = await pool.query(
     `SELECT
+      r.report_type,
+      r.employee_id,
       r.sales_person_name,
       COALESCE(SUM(r.revenue), 0) AS total_revenue,
       COALESCE(SUM(r.gross_profit), 0) AS total_gross_profit
      FROM performance_sales_rows r
      INNER JOIN performance_sales_upload_batches b ON b.id = r.batch_id
-     WHERE b.is_active = 1
-       AND YEAR(b.report_month) = ?
-       AND MONTH(b.report_month) <= ?
-     GROUP BY r.sales_person_name`,
-    [reportYear, ytdMonthNumber]
+     WHERE ${periodFilter.whereSql}
+     GROUP BY r.report_type, r.employee_id, r.sales_person_name`,
+    periodFilter.values
   );
 
   return buildSheetMetricAssignments(sheetConfig, rows);
+}
+
+function buildEfficiencyMetricsPeriodFilter(sheetConfig, overviewContext = null) {
+  if (overviewContext?.metrics_where_sql) {
+    return {
+      whereSql: overviewContext.metrics_where_sql,
+      values: overviewContext.metrics_values || [],
+    };
+  }
+
+  const reportYear = Number(sheetConfig?.report_year);
+  const ytdMonthNumber = Number(sheetConfig?.ytd_month_number);
+  if (!Number.isFinite(reportYear) || reportYear <= 0 || !Number.isFinite(ytdMonthNumber) || ytdMonthNumber <= 0) {
+    return null;
+  }
+
+  return {
+    whereSql: `b.is_active = 1
+       AND YEAR(r.report_month) = ?
+       AND MONTH(r.report_month) <= ?`,
+    values: [reportYear, ytdMonthNumber],
+  };
 }
 
 function createEmptyMetricAssignments() {
@@ -287,16 +325,22 @@ function createEmptyMetricAssignments() {
 function buildSheetMetricAssignments(sheetConfig, rows) {
   const assignments = createEmptyMetricAssignments();
   const memberIndex = new Map();
+  const memberEmployeeIndex = new Map();
   const looseMemberIndex = new Map();
+  const mirnaMemberIndex = new Map();
+  const mirnaMemberEmployeeIndex = new Map();
+  const mirnaLooseMemberIndex = new Map();
   const managerIndex = new Map();
   const looseManagerIndex = new Map();
   const managerEntries = [];
   let fallbackOtherGroupKey = '';
+  let mirnaOtherGroupKey = '';
 
   (sheetConfig?.groups || []).forEach((group) => {
     const groupKey = buildGroupAccessLookupKey(sheetConfig.sheet_type, group);
     const managerName = group?.manager_name || group?.group_name;
     const managerKey = normalizeLookupKey(managerName);
+    const isMirnaGroup = isMirnaPostSalesGroup(group);
 
     addUniqueLookup(managerIndex, managerKey, groupKey);
     addUniqueLookup(looseManagerIndex, normalizeLooseLookupKey(managerName), groupKey);
@@ -312,14 +356,25 @@ function buildSheetMetricAssignments(sheetConfig, rows) {
       fallbackOtherGroupKey = groupKey;
     }
 
+    if (isMirnaGroup && !mirnaOtherGroupKey && (group?.members || []).some((member) => isOtherMember(member))) {
+      mirnaOtherGroupKey = groupKey;
+    }
+
     (group?.members || []).forEach((member) => {
       if (isOtherMember(member)) {
         return;
       }
 
       const memberKey = buildMemberAccessLookupKey(sheetConfig.sheet_type, group, member);
+      addUniqueLookup(memberEmployeeIndex, normalizeEmployeeLookupKey(member?.employee_id), memberKey);
       addUniqueLookup(memberIndex, normalizeLookupKey(member?.seller_name), memberKey);
       addUniqueLookup(looseMemberIndex, normalizeLooseLookupKey(member?.seller_name), memberKey);
+
+      if (isMirnaGroup) {
+        addUniqueLookup(mirnaMemberEmployeeIndex, normalizeEmployeeLookupKey(member?.employee_id), memberKey);
+        addUniqueLookup(mirnaMemberIndex, normalizeLookupKey(member?.seller_name), memberKey);
+        addUniqueLookup(mirnaLooseMemberIndex, normalizeLooseLookupKey(member?.seller_name), memberKey);
+      }
     });
   });
 
@@ -334,9 +389,29 @@ function buildSheetMetricAssignments(sheetConfig, rows) {
     }
 
     const sellerName = String(row.sales_person_name || '').trim();
+    const employeeId = normalizeEmployeeLookupKey(row.employee_id);
     const exactSellerKey = normalizeLookupKey(sellerName);
     const looseSellerKey = normalizeLooseLookupKey(sellerName);
-    const memberKey = resolveUniqueLookup(memberIndex, exactSellerKey)
+    const reportType = normalizePerformanceReportType(row.report_type);
+
+    if (reportType === POSTSALES_REPORT_TYPE && (mirnaOtherGroupKey || mirnaMemberEmployeeIndex.size || mirnaMemberIndex.size || mirnaLooseMemberIndex.size)) {
+      const mirnaMemberKey = resolveUniqueLookup(mirnaMemberEmployeeIndex, employeeId)
+        || resolveUniqueLookup(mirnaMemberIndex, exactSellerKey)
+        || resolveUniqueLookup(mirnaLooseMemberIndex, looseSellerKey);
+
+      if (mirnaMemberKey) {
+        accumulateMetrics(assignments.memberMetrics, mirnaMemberKey, metrics);
+        return;
+      }
+
+      if (mirnaOtherGroupKey) {
+        accumulateMetrics(assignments.otherMetricsByGroup, mirnaOtherGroupKey, metrics);
+        return;
+      }
+    }
+
+    const memberKey = resolveUniqueLookup(memberEmployeeIndex, employeeId)
+      || resolveUniqueLookup(memberIndex, exactSellerKey)
       || resolveUniqueLookup(looseMemberIndex, looseSellerKey);
 
     if (memberKey) {
@@ -448,6 +523,238 @@ async function resolveConfigMonth(params = {}) {
   }
 
   return currentMonthStart();
+}
+
+async function resolveEfficiencyOverviewContext(params = {}) {
+  const explicitConfigMonth = normalizeConfigMonth(params.configMonth || params.config_month);
+  const metricsPeriod = buildEfficiencyPeriodContext(params, 'b.report_month');
+  const configPeriod = buildEfficiencyPeriodContext(params, 'config_month');
+  const activeMonths = metricsPeriod.whereSql ? await listActiveReportMonths(metricsPeriod) : [];
+  const activeMonthCount = activeMonths.length;
+  const fallbackConfigMonth = await resolveConfigMonth(params);
+  const configMonth = explicitConfigMonth
+    || await findLatestConfigMonth(configPeriod)
+    || activeMonths[activeMonths.length - 1]
+    || metricsPeriod.preferred_config_month
+    || fallbackConfigMonth;
+  const savedPeriodSettings = configMonth ? await findPeriodSettings(configMonth) : null;
+  const fallbackYtdMonthNumber = parseInt(String(configMonth || '').slice(5, 7), 10);
+  const savedReportYear = parseInt(String(savedPeriodSettings?.report_year || ''), 10);
+  const reportYear = metricsPeriod.display_year
+    || savedReportYear
+    || parseInt(String(configMonth || '').slice(0, 4), 10)
+    || parseInt(params.year, 10)
+    || new Date().getFullYear();
+  const ytdMonthNumber = clampInt(
+    savedPeriodSettings?.ytd_month_number,
+    fallbackYtdMonthNumber || activeMonthCount || metricsPeriod.fallback_month_count || 1,
+    1,
+    12
+  );
+
+  return {
+    period: metricsPeriod.period,
+    label: metricsPeriod.label,
+    config_month: configMonth,
+    metrics_where_sql: Number.isFinite(reportYear) && reportYear > 0
+      ? `b.is_active = 1 AND YEAR(r.report_month) = ? AND MONTH(r.report_month) <= ?`
+      : metricsPeriod.whereSql,
+    metrics_values: Number.isFinite(reportYear) && reportYear > 0
+      ? [reportYear, ytdMonthNumber]
+      : metricsPeriod.values,
+    active_month_count: activeMonthCount,
+    active_months: activeMonths,
+    report_year: reportYear,
+    ytd_month_number: ytdMonthNumber,
+  };
+}
+
+function buildEfficiencyPeriodContext(params = {}, column) {
+  const period = normalizeEfficiencyPeriod(params.period);
+  const year = parseInt(params.year, 10);
+  const month = parseInt(params.month, 10);
+  const quarter = parseInt(params.quarter, 10);
+  const startDate = normalizeDateValue(params.startDate);
+  const endDate = normalizeDateValue(params.endDate);
+
+  if (period === 'mensual' && Number.isFinite(year) && Number.isFinite(month) && month >= 1 && month <= 12) {
+    return {
+      period,
+      label: `${year}-${String(month).padStart(2, '0')}`,
+      whereSql: `b.is_active = 1 AND YEAR(${column}) = ? AND MONTH(${column}) = ?`,
+      values: [year, month],
+      fallback_month_count: 1,
+      display_year: year,
+      preferred_config_month: `${year}-${String(month).padStart(2, '0')}-01`,
+    };
+  }
+
+  if (period === 'trimestral' && Number.isFinite(year) && Number.isFinite(quarter) && quarter >= 1 && quarter <= 4) {
+    const quarterStartMonth = (quarter - 1) * 3 + 1;
+    const quarterEndMonth = quarterStartMonth + 2;
+
+    return {
+      period,
+      label: `${year} T${quarter}`,
+      whereSql: `b.is_active = 1 AND YEAR(${column}) = ? AND QUARTER(${column}) = ?`,
+      values: [year, quarter],
+      fallback_month_count: 3,
+      display_year: year,
+      preferred_config_month: `${year}-${String(quarterEndMonth).padStart(2, '0')}-01`,
+    };
+  }
+
+  if (period === 'personalizado' && startDate && endDate) {
+    const { startDate: normalizedStartDate, endDate: normalizedEndDate } = normalizeDateRange(startDate, endDate);
+    return {
+      period,
+      label: `${normalizedStartDate} a ${normalizedEndDate}`,
+      whereSql: `b.is_active = 1 AND ${column} BETWEEN ? AND ?`,
+      values: [normalizedStartDate, normalizedEndDate],
+      fallback_month_count: countMonthsInRange(normalizedStartDate, normalizedEndDate),
+      display_year: parseInt(normalizedEndDate.slice(0, 4), 10) || parseInt(normalizedStartDate.slice(0, 4), 10),
+      preferred_config_month: normalizeConfigMonth(normalizedEndDate),
+    };
+  }
+
+  if (Number.isFinite(year) && year > 0) {
+    return {
+      period: 'anual',
+      label: String(year),
+      whereSql: `b.is_active = 1 AND YEAR(${column}) = ?`,
+      values: [year],
+      fallback_month_count: 12,
+      display_year: year,
+      preferred_config_month: `${year}-12-01`,
+    };
+  }
+
+  return {
+    period: 'anual',
+    label: 'Periodo activo',
+    whereSql: 'b.is_active = 1',
+    values: [],
+    fallback_month_count: 1,
+    display_year: null,
+    preferred_config_month: null,
+  };
+}
+
+async function listActiveReportMonths(periodContext) {
+  const [rows] = await pool.query(
+    `SELECT DISTINCT DATE_FORMAT(b.report_month, '%Y-%m-01') AS report_month
+       FROM performance_sales_upload_batches b
+      WHERE ${periodContext.whereSql}
+      ORDER BY report_month ASC`,
+    periodContext.values
+  );
+
+  return rows
+    .map((row) => normalizeConfigMonth(row.report_month))
+    .filter(Boolean);
+}
+
+async function findLatestConfigMonth(periodContext) {
+  const [rows] = await pool.query(
+    `SELECT config_month
+       FROM performance_efficiency_period_settings
+      WHERE ${buildConfigPeriodWhereSql(periodContext.whereSql)}
+      ORDER BY config_month DESC
+      LIMIT 1`,
+    periodContext.values
+  );
+
+  return normalizeConfigMonth(rows[0]?.config_month);
+}
+
+async function findPeriodSettings(configMonth) {
+  const [rows] = await pool.query(
+    `SELECT report_year, ytd_month_number
+       FROM performance_efficiency_period_settings
+      WHERE config_month = ?
+      ORDER BY sheet_type ASC, id ASC
+      LIMIT 1`,
+    [configMonth]
+  );
+
+  return rows[0] || null;
+}
+
+function applyOverviewContextToSheet(sheetConfig, overviewContext = null) {
+  if (!overviewContext) {
+    return sheetConfig;
+  }
+
+  return {
+    ...sheetConfig,
+    config_month: overviewContext.config_month || sheetConfig.config_month,
+    report_year: overviewContext.report_year || sheetConfig.report_year,
+    ytd_month_number: overviewContext.ytd_month_number || sheetConfig.ytd_month_number,
+    active_month_count: overviewContext.active_month_count,
+    active_months: overviewContext.active_months || [],
+    filter_period: overviewContext.period,
+    filter_label: overviewContext.label,
+  };
+}
+
+function buildEfficiencyFilterPayload(overviewContext = null) {
+  if (!overviewContext) {
+    return null;
+  }
+
+  return {
+    period: overviewContext.period,
+    label: overviewContext.label,
+    active_month_count: overviewContext.active_month_count,
+    ytd_month_number: overviewContext.ytd_month_number,
+    config_month: overviewContext.config_month,
+  };
+}
+
+function createFullAccessScope(reason = 'administrative_role') {
+  return {
+    status: 'full_access',
+    reason,
+    matched_groups: [],
+    matched_members: [],
+    allowed_group_keys: [],
+    allowed_member_keys: [],
+  };
+}
+
+function normalizeEfficiencyPeriod(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return ['mensual', 'trimestral', 'personalizado', 'anual'].includes(normalized)
+    ? normalized
+    : 'anual';
+}
+
+function buildConfigPeriodWhereSql(whereSql = '') {
+  return String(whereSql)
+    .replaceAll('b.is_active = 1 AND ', '')
+    .replaceAll(' AND b.is_active = 1', '')
+    .replaceAll('b.is_active = 1', '1 = 1')
+    .replaceAll('b.', '');
+}
+
+function normalizeDateRange(startDate, endDate) {
+  if (startDate <= endDate) {
+    return { startDate, endDate };
+  }
+
+  return {
+    startDate: endDate,
+    endDate: startDate,
+  };
+}
+
+function countMonthsInRange(startDate, endDate) {
+  const start = new Date(`${startDate.slice(0, 7)}-01T00:00:00Z`);
+  const end = new Date(`${endDate.slice(0, 7)}-01T00:00:00Z`);
+
+  return ((end.getUTCFullYear() - start.getUTCFullYear()) * 12)
+    + (end.getUTCMonth() - start.getUTCMonth())
+    + 1;
 }
 
 async function ensureEfficiencySeed(configMonth) {
@@ -732,14 +1039,14 @@ async function replaceEfficiencyConfig(configMonth, normalizedPayload, userId) {
           created_by,
           updated_by
         ) VALUES (?,?,?,?,?,?)`,
-        [
+        normalizeSqlParams([
           sheetType,
           configMonth,
           sheet.report_year,
           sheet.ytd_month_number,
           userId,
           userId,
-        ]
+        ])
       );
 
       for (const group of sheet.groups) {
@@ -760,7 +1067,7 @@ async function replaceEfficiencyConfig(configMonth, normalizedPayload, userId) {
             created_by,
             updated_by
           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-          [
+          normalizeSqlParams([
             sheetType,
             configMonth,
             group.group_name,
@@ -775,7 +1082,7 @@ async function replaceEfficiencyConfig(configMonth, normalizedPayload, userId) {
             group.sort_order,
             userId,
             userId,
-          ]
+          ])
         );
 
         for (const member of group.members) {
@@ -809,7 +1116,7 @@ async function replaceEfficiencyConfig(configMonth, normalizedPayload, userId) {
               created_by,
               updated_by
             ) VALUES (${EFFICIENCY_MEMBER_INSERT_PLACEHOLDERS})`,
-            [
+            normalizeSqlParams([
               groupResult.insertId,
               sheetType,
               configMonth,
@@ -837,7 +1144,7 @@ async function replaceEfficiencyConfig(configMonth, normalizedPayload, userId) {
               member.sort_order,
               userId,
               userId,
-            ]
+            ])
           );
         }
       }
@@ -1265,12 +1572,31 @@ function normalizeLookupKey(value) {
     .join(' ');
 }
 
+function normalizeSqlParams(values) {
+  return values.map((value) => (value === undefined ? null : value));
+}
+
 function normalizeLooseLookupKey(value) {
   return normalizeLookupKey(value)
     .split(' ')
     .map((part) => part.replace(/[aeiou]/g, ''))
     .filter(Boolean)
     .join(' ');
+}
+
+function normalizeEmployeeLookupKey(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function normalizePerformanceReportType(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function isMirnaPostSalesGroup(group) {
+  const groupName = normalizeLookupKey(group?.group_name);
+  const managerName = normalizeLookupKey(group?.manager_name);
+
+  return [groupName, managerName].some((value) => value.includes('mirna') && value.includes('castillo'));
 }
 
 function resolveSellerMetrics(sheetConfig, groupConfig, memberConfig, metricAssignments) {

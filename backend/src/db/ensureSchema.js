@@ -5,9 +5,18 @@ const STATEMENTS = [
       ADD COLUMN IF NOT EXISTS user_roles_json JSON NULL AFTER user_email`,
   `ALTER TABLE contractos_sessions
       ADD COLUMN IF NOT EXISTS can_upload_reports TINYINT(1) NOT NULL DEFAULT 0 AFTER user_roles_json`,
+  `CREATE TABLE IF NOT EXISTS app_settings (
+    \`key\`       VARCHAR(100) NOT NULL PRIMARY KEY,
+    \`value\`     TEXT         NOT NULL,
+    updated_at     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  `INSERT IGNORE INTO app_settings (\`key\`, \`value\`) VALUES
+      ('at_risk_months', '3'),
+      ('app_version', '1.0.0'),
+      ('full_view_access_users', '[]')`,
   `CREATE TABLE IF NOT EXISTS performance_sales_upload_batches (
     id                BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
-    report_type       ENUM('it','xerox') NOT NULL,
+    report_type       ENUM('it','xerox','postventas') NOT NULL,
     report_month      DATE            NOT NULL,
     filename          VARCHAR(500)    NOT NULL,
     sheet_name        VARCHAR(255)    NOT NULL DEFAULT '',
@@ -24,7 +33,7 @@ const STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS performance_sales_rows (
     id                    BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
     batch_id              BIGINT UNSIGNED NOT NULL,
-    report_type           ENUM('it','xerox') NOT NULL,
+    report_type           ENUM('it','xerox','postventas') NOT NULL,
     report_month          DATE            NOT NULL,
     order_number          BIGINT          NULL,
     account_code          VARCHAR(100)    NOT NULL DEFAULT '',
@@ -45,6 +54,7 @@ const STATEMENTS = [
     sale_date             DATE            NULL,
     invoice_number        VARCHAR(100)    NOT NULL DEFAULT '',
     sales_person_name     VARCHAR(255)    NOT NULL DEFAULT '',
+    employee_id           VARCHAR(100)    NOT NULL DEFAULT '',
     document_type         VARCHAR(50)     NOT NULL DEFAULT '',
     business_unit         VARCHAR(100)    NOT NULL DEFAULT '',
     sales_mode            VARCHAR(100)    NOT NULL DEFAULT '',
@@ -58,10 +68,18 @@ const STATEMENTS = [
     INDEX idx_ps_rows_sale_date (sale_date),
     INDEX idx_ps_rows_client (client_name),
     INDEX idx_ps_rows_owner (sales_person_name),
+    INDEX idx_ps_rows_employee (employee_id),
     INDEX idx_ps_rows_invoice (invoice_number),
     INDEX idx_ps_rows_serial (serial_number),
     INDEX idx_ps_rows_business (business_unit)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  `ALTER TABLE performance_sales_upload_batches
+      MODIFY COLUMN report_type ENUM('it','xerox','postventas') NOT NULL`,
+  `ALTER TABLE performance_sales_rows
+      MODIFY COLUMN report_type ENUM('it','xerox','postventas') NOT NULL`,
+  `ALTER TABLE performance_sales_rows
+      ADD COLUMN IF NOT EXISTS employee_id VARCHAR(100) NOT NULL DEFAULT '' AFTER sales_person_name`,
+  'ALTER TABLE performance_sales_rows ADD INDEX idx_ps_rows_employee (employee_id)',
   `CREATE TABLE IF NOT EXISTS performance_efficiency_period_settings (
     id                    BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
     sheet_type            ENUM('sales_productivity','presales') NOT NULL,
@@ -234,6 +252,19 @@ async function ensureSchema() {
       }
     }
   }
+
+  await repairPostSalesRowMonths();
+}
+
+async function repairPostSalesRowMonths() {
+  await pool.query(
+    `UPDATE performance_sales_rows r
+     INNER JOIN performance_sales_upload_batches b ON b.id = r.batch_id
+     SET r.report_month = DATE_SUB(r.sale_date, INTERVAL DAYOFMONTH(r.sale_date) - 1 DAY)
+     WHERE b.report_type = 'postventas'
+       AND r.sale_date IS NOT NULL
+       AND r.report_month <> DATE_SUB(r.sale_date, INTERVAL DAYOFMONTH(r.sale_date) - 1 DAY)`
+  );
 }
 
 function isIgnorableSchemaError(error) {
